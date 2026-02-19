@@ -1,0 +1,27 @@
+{
+  "name": "orionbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "scratch": "ts-node src/scratch.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.77.0",
+    "dotenv": "^17.3.1",
+    "fastify": "^5.7.4",
+    "grammy": "^1.40.0"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "defaultProvider": "anthropic",
+  "providers": {
+    "anthropic": {
+      "model": "claude-sonnet-4-6"
+    },
+    "ollama": {
+      "model": "llama3.2",
+      "baseUrl": "http://localhost:11434"
+    }
+  },
+  "agents": {
+    "main": {
+      "name": "Atlas",
+      "sessionPrefix": "agent:main"
+    }
+  },
+  "defaultAgent": "main",
+  "telegram": {
+    "allowedUserIds": [8300966403],
+    "unauthorizedBehavior": "reject",
+    "rateLimit": {
+      "maxMessages": 20,
+      "windowSeconds": 60
+    }
+  },
+  "session": {
+    "idleResetMinutes": 240
+  },
+  "agent": {
+    "maxIterations": 10,
+    "compaction": {
+      "enabled": true,
+      "contextWindowTokens": 200000,
+      "thresholdPercent": 80
+    }
+  },
+  "workspace": "~/.bot-workspace"
+}
