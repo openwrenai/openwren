@@ -177,9 +177,15 @@ export function createTelegramBot(): Bot {
     };
 
     try {
-      const response = await runAgentLoop(agentId, agentConfig, text, confirm);
-      console.log(`[telegram] ${agentConfig.name} reply: ${response.slice(0, 120)}${response.length > 120 ? "..." : ""}`);
-      const formatted = `**${agentConfig.name}:** ${response}`;
+      const result = await runAgentLoop(agentId, agentConfig, text, confirm);
+      console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
+
+      // Compaction notification — tell user session was just compacted
+      if (result.compacted) {
+        await ctx.reply("📦 Session compacted — older messages summarized.");
+      }
+
+      const formatted = `**${agentConfig.name}:** ${result.text}`;
 
       // Telegram has a 4096 char message limit — split if needed
       if (formatted.length <= 4096) {
@@ -189,6 +195,11 @@ export function createTelegramBot(): Bot {
         for (let i = 0; i < formatted.length; i += 4096) {
           await ctx.reply(formatted.slice(i, i + 4096), { parse_mode: "Markdown" });
         }
+      }
+
+      // Warning notification — context is getting full, compaction coming soon
+      if (result.nearThreshold) {
+        await ctx.reply("⚠️ Context is almost full — compaction will run soon.");
       }
     } catch (err) {
       console.error("[telegram] Error running agent loop:", err);

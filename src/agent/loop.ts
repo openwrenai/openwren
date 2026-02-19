@@ -9,22 +9,29 @@ import {
   isSessionIdleExpired,
   resetSession,
   compactIfNeeded,
+  estimateTokens,
 } from "./history";
 import { getToolDefinitions, executeTool, ConfirmFn } from "../tools";
 
 const MAX_ITERATIONS = config.agent?.maxIterations ?? 10;
 
+export interface LoopResult {
+  text: string;
+  compacted: boolean;       // compaction just ran this turn
+  nearThreshold: boolean;   // session is within 5% of compaction threshold
+}
+
 /**
  * Run one full agent turn for the given agentId + message.
  * Handles session loading, locking, the ReAct loop, and session persistence.
- * Returns the final text reply to send back to the user.
+ * Returns the reply text + compaction status flags.
  */
 export async function runAgentLoop(
   agentId: string,
   agentConfig: AgentConfig,
   userMessage: string,
   confirm?: ConfirmFn
-): Promise<string> {
+): Promise<LoopResult> {
   return withSessionLock(agentConfig.sessionPrefix, async () => {
     const provider = createProvider();
     const systemPrompt = loadSystemPrompt(agentId, agentConfig);
@@ -38,7 +45,22 @@ export async function runAgentLoop(
 
     // Load existing history, compact if needed, then append the new user message
     let messages: Message[] = loadSession(agentConfig.sessionPrefix);
-    messages = await compactIfNeeded(agentConfig.sessionPrefix, messages, provider);
+    const compactionResult = await compactIfNeeded(agentConfig.sessionPrefix, messages, provider);
+    messages = compactionResult.messages;
+
+    // Overflow check — reject if session + new message would exceed 100% of context window
+    const { contextWindowTokens } = config.agent.compaction;
+    const newMsgTokens = Math.ceil(userMessage.length / 4);
+    const currentTokens = estimateTokens(messages);
+    if (currentTokens + newMsgTokens > contextWindowTokens) {
+      console.log(`[loop] Overflow rejected: session ${currentTokens} + message ${newMsgTokens} > ${contextWindowTokens}`);
+      return {
+        text: `Your message is too large for the current context window. Please send a shorter message.`,
+        compacted: compactionResult.compacted,
+        nearThreshold: false,
+      };
+    }
+
     const userMsg: Message = { role: "user", content: userMessage };
     messages.push(userMsg);
     appendMessage(agentConfig.sessionPrefix, userMsg);
@@ -53,7 +75,11 @@ export async function runAgentLoop(
       const response = await provider.chat(systemPrompt, messages, tools);
 
       if (response.type === "error") {
-        return `Sorry, I ran into an error: ${response.error}`;
+        return {
+          text: `Sorry, I ran into an error: ${response.error}`,
+          compacted: compactionResult.compacted,
+          nearThreshold: compactionResult.nearThreshold,
+        };
       }
 
       // Plain text response — we're done
@@ -64,7 +90,11 @@ export async function runAgentLoop(
         };
         messages.push(assistantMsg);
         appendMessage(agentConfig.sessionPrefix, assistantMsg);
-        return response.text ?? "";
+        return {
+          text: response.text ?? "",
+          compacted: compactionResult.compacted,
+          nearThreshold: compactionResult.nearThreshold,
+        };
       }
 
       // Tool use — execute each tool call and feed results back
@@ -114,6 +144,10 @@ export async function runAgentLoop(
     const assistantCapMsg: Message = { role: "assistant", content: capMsg };
     messages.push(assistantCapMsg);
     appendMessage(agentConfig.sessionPrefix, assistantCapMsg);
-    return capMsg;
+    return {
+      text: capMsg,
+      compacted: compactionResult.compacted,
+      nearThreshold: compactionResult.nearThreshold,
+    };
   });
 }

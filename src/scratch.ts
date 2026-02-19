@@ -68,10 +68,19 @@ async function main() {
           });
         };
 
+        const result = await runAgentLoop(AGENT_ID, AGENT_CONFIG, message, confirm);
+
+        if (result.compacted) {
+          console.log(`\n📦 Session compacted — older messages summarized.`);
+        }
+
         process.stdout.write(`\n${AGENT_CONFIG.name}: `);
-        const response = await runAgentLoop(AGENT_ID, AGENT_CONFIG, message, confirm);
-        console.log(response);
+        console.log(result.text);
         console.log();
+
+        if (result.nearThreshold) {
+          console.log(`⚠️  Context is almost full — compaction will run soon.\n`);
+        }
       } catch (err) {
         console.error("Error:", err);
       }

@@ -148,53 +148,91 @@ export function withSessionLock<T>(
 
 /**
  * Estimates token count from raw JSON string length.
- * character count / 4 is a good enough approximation — fast, zero deps.
+ * Counts everything including JSON scaffolding (braces, quotes, role/content keys).
+ * Kept as a reference — use estimateTokensContent() for a more accurate estimate.
  */
-function estimateTokens(messages: Message[]): number {
+function estimateTokensJson(messages: Message[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+/**
+ * Estimates token count by extracting only actual text content from messages.
+ * Skips JSON scaffolding (braces, quotes, role/content keys) that Anthropic
+ * doesn't tokenize, giving a more accurate estimate than estimateTokensJson().
+ *
+ * Handles both plain string content and MessageContent[] arrays (tool calls,
+ * tool results, text blocks).
+ */
+function estimateTokensContent(messages: Message[]): number {
+  let chars = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      chars += msg.content.length;
+    } else {
+      for (const block of msg.content) {
+        if (block.text) chars += block.text.length;                        // text block
+        if (block.input) chars += JSON.stringify(block.input).length;      // tool call args (structured, must stringify)
+        if (block.content) chars += block.content.length;                  // tool result
+      }
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
+// Active estimator — swap to estimateTokensJson() if Anthropic counts JSON scaffolding too
+export function estimateTokens(messages: Message[]): number {
+  return estimateTokensContent(messages);
+}
+
+export interface CompactionResult {
+  messages: Message[];
+  compacted: boolean;       // true if compaction just ran
+  nearThreshold: boolean;   // true if session is within 5% of compaction threshold
 }
 
 /**
  * Checks if compaction is needed and runs it if so.
  * Called at the start of every agent turn, before sending messages to the LLM.
  *
- * Algorithm:
- * 1. Estimate token count of current messages
- * 2. If below threshold, return messages unchanged
- * 3. If above threshold:
- *    - Split messages in half — old and recent
- *    - Ask LLM to summarize the old half
- *    - Replace old half with a single synthetic summary message
- *    - Overwrite the session file
- * 4. Return the compacted messages
+ * Three tiers (derived from thresholdPercent in config):
+ * - Below (threshold - 5)%: no action
+ * - Between (threshold - 5)% and threshold%: warning flag (nearThreshold)
+ * - Above threshold%: compact all messages into a single summary
+ *
+ * Returns CompactionResult with messages + status flags for the channel layer.
  */
 export async function compactIfNeeded(
   sessionKey: string,
   messages: Message[],
   provider: LLMProvider
-): Promise<Message[]> {
+): Promise<CompactionResult> {
   const { enabled, contextWindowTokens, thresholdPercent } = config.agent.compaction;
-  if (!enabled || messages.length < 4) return messages;
+  if (!enabled || messages.length < 4) {
+    return { messages, compacted: false, nearThreshold: false };
+  }
 
   const threshold = Math.floor(contextWindowTokens * (thresholdPercent / 100));
+  const warningThreshold = Math.floor(contextWindowTokens * ((thresholdPercent - 5) / 100));
   const estimated = estimateTokens(messages);
 
-  if (estimated < threshold) return messages;
+  if (estimated < warningThreshold) {
+    return { messages, compacted: false, nearThreshold: false };
+  }
+
+  if (estimated < threshold) {
+    console.log(`[compaction] Session ${sessionKey} at ~${estimated} tokens — approaching threshold (${threshold}). Warning.`);
+    return { messages, compacted: false, nearThreshold: true };
+  }
 
   console.log(`[compaction] Session ${sessionKey} at ~${estimated} tokens (threshold: ${threshold}). Compacting...`);
 
-  // Split in half — keep the recent half verbatim
-  const splitAt = Math.floor(messages.length / 2);
-  const oldMessages = messages.slice(0, splitAt);
-  const recentMessages = messages.slice(splitAt);
+  // Summarize 100% of messages — session is replaced with a single summary.
+  // The summary is assigned to role:user and will be merged with the next
+  // incoming user message by Anthropic before being sent to the model.
+  const summaryPrompt = `Summarize the following conversation. Preserve: key facts about the user, decisions made, tasks completed, open items, and any important context. Be concise.
 
-  // Ask the LLM to summarize the old half
-  const summaryPrompt = `The following is the first half of a conversation that needs to be summarized to save context space.
-Write a concise summary that preserves: key facts about the user, decisions made, tasks completed, open items, and any important context.
-Be thorough but concise — this summary will replace the original messages.
-
-Conversation to summarize:
-${oldMessages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`).join("\n\n")}`;
+Conversation:
+${messages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`).join("\n\n")}`;
 
   const summaryResponse = await provider.chat(
     "You are a helpful assistant that summarizes conversations accurately and concisely.",
@@ -211,10 +249,10 @@ ${oldMessages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content
     content: `[Previous conversation summary]\n${summaryText}`,
   };
 
-  const compactedMessages = [summaryMessage, ...recentMessages];
+  const compactedMessages = [summaryMessage];
   overwriteSession(sessionKey, compactedMessages);
 
-  console.log(`[compaction] Done. Reduced from ${messages.length} to ${compactedMessages.length} messages.`);
+  console.log(`[compaction] Done. Reduced ${messages.length} messages to 1 summary.`);
 
-  return compactedMessages;
+  return { messages: compactedMessages, compacted: true, nearThreshold: false };
 }
