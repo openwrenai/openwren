@@ -35,6 +35,7 @@ export function getToolDefinitions(): ToolDefinition[] {
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
+  agentId: string,
   confirm?: ConfirmFn
 ): Promise<string> {
   try {
@@ -45,7 +46,7 @@ export async function executeTool(
 
         // Destructive commands require confirmation unless already approved
         if (DESTRUCTIVE_COMMANDS.has(bin)) {
-          if (!isApproved(command)) {
+          if (!isApproved(agentId, command)) {
             if (!confirm) {
               return `[shell] Command "${command}" requires confirmation but no confirm function is available.`;
             }
@@ -56,7 +57,7 @@ export async function executeTool(
               return `[shell] Command cancelled by user.`;
             }
             if (answer === "always") {
-              permanentlyApprove(command);
+              permanentlyApprove(agentId, command);
             }
           } else {
             console.log(`[approvals] Auto-approved: ${command}`);

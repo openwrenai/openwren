@@ -1,8 +1,9 @@
-import { Bot, Context } from "grammy";
+import { Bot } from "grammy";
 import * as fs from "fs";
 import * as path from "path";
-import { config } from "../config";
+import { config, AgentConfig } from "../config";
 import { runAgentLoop } from "../agent/loop";
+import { routeMessage } from "../agent/router";
 
 // ---------------------------------------------------------------------------
 // Chat ID persistence
@@ -55,21 +56,28 @@ export function clearPendingConfirmation(chatId: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Bot setup
+// Telegram markdown formatter
 // ---------------------------------------------------------------------------
 
-export function createTelegramBot(): Bot {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    throw new Error("TELEGRAM_BOT_TOKEN is not set in environment");
-  }
+/**
+ * Converts standard markdown to Telegram-compatible markdown.
+ * Telegram only supports: **bold**, *italic*, `code`, ```code blocks```, [links].
+ * Headers (# ## ###) are converted to **bold** text.
+ */
+function formatForTelegram(text: string): string {
+  return text.replace(/^(#{1,6})\s+(.+)$/gm, "**$2**");
+}
 
-  const bot = new Bot(token);
-  const agentId = config.defaultAgent;
-  const agentConfig = config.agents[agentId];
+// ---------------------------------------------------------------------------
+// Shared bot setup — wires rate limiter, whitelist, confirmation flow,
+// message handler, and compaction notifications onto any Bot instance.
+//
+// fixedAgentId = null  → main bot, uses router to resolve agent per message
+// fixedAgentId = "xyz" → dedicated bot, always routes to that agent
+// ---------------------------------------------------------------------------
 
+function setupBot(bot: Bot, fixedAgentId: string | null): void {
   // Per-sender sliding window rate limiter
-  // Map<senderId, timestamp[]> — timestamps of recent messages
   const rateLimitMap = new Map<number, number[]>();
 
   function isRateLimited(senderId: number): boolean {
@@ -78,7 +86,7 @@ export function createTelegramBot(): Bot {
     const now = Date.now();
 
     const timestamps = (rateLimitMap.get(senderId) ?? [])
-      .filter((t) => now - t < windowMs); // drop expired timestamps
+      .filter((t) => now - t < windowMs);
 
     if (timestamps.length >= maxMessages) {
       rateLimitMap.set(senderId, timestamps);
@@ -90,14 +98,14 @@ export function createTelegramBot(): Bot {
     return false;
   }
 
-  // Middleware — rate limiter (runs before whitelist)
+  // Middleware — rate limiter
   bot.use(async (ctx, next) => {
     const senderId = ctx.from?.id;
     if (!senderId) return;
 
     if (isRateLimited(senderId)) {
       console.log(`[telegram] Rate limited sender: ${senderId}`);
-      return; // silent drop
+      return;
     }
 
     await next();
@@ -108,14 +116,11 @@ export function createTelegramBot(): Bot {
     const senderId = ctx.from?.id;
     if (!senderId) return;
 
-    const allowed = config.telegram.allowedUserIds;
-
-    if (!allowed.includes(senderId)) {
+    if (!config.telegram.allowedUserIds.includes(senderId)) {
       console.log(`[telegram] Rejected message from unauthorized user: ${senderId}`);
       if (config.telegram.unauthorizedBehavior === "reject") {
-        await ctx.reply("Sorry Ismail you are not authenticated.");
+        await ctx.reply("Unauthorized.");
       }
-      // "silent" — do nothing, give no indication the bot exists
       return;
     }
 
@@ -154,10 +159,32 @@ export function createTelegramBot(): Bot {
       return;
     }
 
+    // Resolve agent — either fixed (dedicated bot) or via router (main bot)
+    let agentId: string;
+    let agentConfig: AgentConfig;
+    let message: string;
+
+    if (fixedAgentId) {
+      agentId = fixedAgentId;
+      agentConfig = config.agents[fixedAgentId];
+      message = text;
+    } else {
+      const route = routeMessage(text);
+      agentId = route.agentId;
+      agentConfig = route.agentConfig;
+      message = route.message;
+    }
+
+    // Empty message after stripping prefix (e.g. user sent just "/einstein")
+    if (!message) {
+      await ctx.reply(`**${agentConfig.name}** is listening. Send a message after the prefix.`, { parse_mode: "Markdown" });
+      return;
+    }
+
     // Show typing indicator
     await ctx.replyWithChatAction("typing");
 
-    console.log(`[telegram] Message from ${senderId}: ${text}`);
+    console.log(`[telegram] Message from ${senderId} → ${agentConfig.name}: ${message}`);
 
     // Confirm callback — asks the user YES/NO/ALWAYS before destructive operations
     const confirm = (command: string): Promise<boolean | "always"> => {
@@ -177,39 +204,74 @@ export function createTelegramBot(): Bot {
     };
 
     try {
-      const result = await runAgentLoop(agentId, agentConfig, text, confirm);
+      const result = await runAgentLoop(agentId, agentConfig, message, confirm);
       console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
 
-      // Compaction notification — tell user session was just compacted
       if (result.compacted) {
         await ctx.reply("📦 Session compacted — older messages summarized.");
       }
 
-      const formatted = `**${agentConfig.name}:** ${result.text}`;
+      const formatted = formatForTelegram(`**${agentConfig.name}:** ${result.text}`);
 
       // Telegram has a 4096 char message limit — split if needed
       if (formatted.length <= 4096) {
         await ctx.reply(formatted, { parse_mode: "Markdown" });
       } else {
-        // Split into chunks
         for (let i = 0; i < formatted.length; i += 4096) {
           await ctx.reply(formatted.slice(i, i + 4096), { parse_mode: "Markdown" });
         }
       }
 
-      // Warning notification — context is getting full, compaction coming soon
       if (result.nearThreshold) {
         await ctx.reply("⚠️ Context is almost full — compaction will run soon.");
       }
     } catch (err) {
       console.error("[telegram] Error running agent loop:", err);
-      await ctx.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`);
+      await ctx.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`, { parse_mode: "Markdown" });
     }
   });
 
   bot.catch((err) => {
     console.error("[telegram] Bot error:", err);
   });
+}
 
+// ---------------------------------------------------------------------------
+// Main bot — handles default agent + prefix routing
+// ---------------------------------------------------------------------------
+
+export function createTelegramBot(): Bot {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    throw new Error("TELEGRAM_BOT_TOKEN is not set in environment");
+  }
+
+  const bot = new Bot(token);
+  setupBot(bot, null); // null = use router
   return bot;
+}
+
+// ---------------------------------------------------------------------------
+// Per-agent dedicated bots — one per agent that has a telegramToken set
+// ---------------------------------------------------------------------------
+
+export interface AgentBot {
+  bot: Bot;
+  agentId: string;
+  agentName: string;
+}
+
+export function createAgentBots(): AgentBot[] {
+  const bots: AgentBot[] = [];
+
+  for (const [agentId, agentConfig] of Object.entries(config.agents)) {
+    if (!agentConfig.telegramToken) continue;
+
+    const bot = new Bot(agentConfig.telegramToken);
+    setupBot(bot, agentId);
+    bots.push({ bot, agentId, agentName: agentConfig.name });
+    console.log(`[telegram] Created dedicated bot for agent: ${agentConfig.name} (${agentId})`);
+  }
+
+  return bots;
 }

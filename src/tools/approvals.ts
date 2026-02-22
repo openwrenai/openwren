@@ -4,28 +4,39 @@ import { config } from "../config";
 
 const approvalsPath = path.join(config.workspaceDir, "exec-approvals.json");
 
-function loadApprovals(): string[] {
-  if (!fs.existsSync(approvalsPath)) return [];
+type ApprovalsMap = Record<string, string[]>;
+
+function loadApprovals(): ApprovalsMap {
+  if (!fs.existsSync(approvalsPath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(approvalsPath, "utf-8")) as string[];
+    const data = JSON.parse(fs.readFileSync(approvalsPath, "utf-8"));
+    // Migrate from old flat array format → keyed object
+    if (Array.isArray(data)) {
+      const migrated: ApprovalsMap = { main: data };
+      saveApprovals(migrated);
+      return migrated;
+    }
+    return data as ApprovalsMap;
   } catch {
-    return [];
+    return {};
   }
 }
 
-function saveApprovals(approvals: string[]): void {
+function saveApprovals(approvals: ApprovalsMap): void {
   fs.writeFileSync(approvalsPath, JSON.stringify(approvals, null, 2), "utf-8");
 }
 
-export function isApproved(command: string): boolean {
-  return loadApprovals().includes(command);
+export function isApproved(agentId: string, command: string): boolean {
+  const approvals = loadApprovals();
+  return (approvals[agentId] ?? []).includes(command);
 }
 
-export function permanentlyApprove(command: string): void {
+export function permanentlyApprove(agentId: string, command: string): void {
   const approvals = loadApprovals();
-  if (!approvals.includes(command)) {
-    approvals.push(command);
+  if (!approvals[agentId]) approvals[agentId] = [];
+  if (!approvals[agentId].includes(command)) {
+    approvals[agentId].push(command);
     saveApprovals(approvals);
-    console.log(`[approvals] Permanently approved: ${command}`);
+    console.log(`[approvals] Permanently approved for ${agentId}: ${command}`);
   }
 }

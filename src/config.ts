@@ -9,6 +9,7 @@ export interface AgentConfig {
   name: string;
   sessionPrefix: string;
   triggerPrefix?: string;
+  telegramToken?: string;  // resolved from env: {NAME}_TELEGRAM_TOKEN (e.g. EINSTEIN_TELEGRAM_TOKEN)
 }
 
 export interface Config {
@@ -80,6 +81,17 @@ function loadConfig(): Config {
   // Validate API key for selected provider
   if (raw.defaultProvider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is not set in environment");
+  }
+
+  // Resolve per-agent Telegram tokens from env vars
+  // Convention: {AGENT_NAME}_TELEGRAM_TOKEN (e.g. Einstein → EINSTEIN_TELEGRAM_TOKEN)
+  for (const [id, agent] of Object.entries(raw.agents as Record<string, AgentConfig>)) {
+    const envVar = `${agent.name.toUpperCase()}_TELEGRAM_TOKEN`;
+    const token = process.env[envVar];
+    if (token) {
+      agent.telegramToken = token;
+      console.log(`[config] Agent "${id}" has dedicated Telegram bot (${envVar})`);
+    }
   }
 
   const workspaceDir = resolveWorkspace(raw.workspace ?? "~/.bot-workspace");

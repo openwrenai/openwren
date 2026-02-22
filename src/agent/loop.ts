@@ -116,7 +116,7 @@ export async function runAgentLoop(
         const toolResults = await Promise.all(
           response.toolCalls.map(async (tc) => {
             console.log(`[loop] Tool call: ${tc.name}`, tc.input);
-            const result = await executeTool(tc.name, tc.input, confirm);
+            const result = await executeTool(tc.name, tc.input, agentId, confirm);
             console.log(`[loop] Tool result: ${tc.name} →`, result.slice(0, 100));
             return {
               type: "tool_result" as const,

@@ -49,13 +49,14 @@ Add support for multiple agents with different personalities, each with their ow
 {
   "agents": {
     "main": {
-      "name": "Jarvis",
+      "name": "Atlas",
       "sessionPrefix": "agent:main"
     },
     "einstein": {
       "name": "Einstein",
       "sessionPrefix": "agent:einstein",
-      "triggerPrefix": "/einstein"
+      "triggerPrefix": "/einstein",
+      "telegramToken": "EINSTEIN_BOT_TOKEN"
     },
     "personal_trainer": {
       "name": "Coach",
@@ -69,6 +70,8 @@ Add support for multiple agents with different personalities, each with their ow
 
 Note there is no `soulFile` field — the soul path is always derived from the agent ID: `~/.bot-workspace/agents/{agent-id}/soul.md`. Keeping it implicit means one less thing to misconfigure.
 
+**Dedicated Telegram bot per agent (optional):** An agent can have its own Telegram bot by setting `telegramToken` to an env var name (e.g. `"EINSTEIN_BOT_TOKEN"`). The actual token lives in `.env`, never in config.json. At startup, `config.ts` resolves `process.env[agent.telegramToken]` to get the real token. For each agent with a `telegramToken`, a separate grammY `Bot` instance is spun up — hardwired to that agent, no router needed. The main bot (using `TELEGRAM_BOT_TOKEN`) handles Atlas + any prefix-routed agents. An agent with its own bot can also have a `triggerPrefix` — both access paths work independently.
+
 **Session isolation:** Each agent gets its own session file keyed by its `sessionPrefix`. Jarvis and Scout never share conversation history. Their sessions compact independently. But they read from and write to the same `memory/` directory — Scout can save research findings that Jarvis can retrieve later via `memory_search`.
 
 **Memory key convention:** Instruct each agent in its soul file to prefix memory keys with its own name (e.g. `scout-python-async`, `jarvis-user-prefs`). This avoids collisions and makes it clear which agent wrote what. Not enforced technically — just a convention in the soul file instructions.
@@ -77,15 +80,18 @@ Note there is no `soulFile` field — the soul path is always derived from the a
 
 **Implementation checklist:**
 
-- [ ] Create `~/.bot-workspace/agents/` directory with one subdirectory per agent, each containing `soul.md`
-- [ ] Update `config.json` schema to support `agents` map and `defaultAgent` (no `soulFile` field — path derived from agent ID)
-- [ ] `agent/router.ts` — parse incoming message text, match against `triggerPrefix` fields, return `{ agentConfig, strippedMessage }`. Falls back to `defaultAgent` if no prefix matches
-- [ ] Update `agent/prompt.ts` — accept agent config, load soul from `~/.bot-workspace/agents/{agent-id}/soul.md`
-- [ ] Update `agent/loop.ts` — accept resolved agent config, use `sessionPrefix` as session key, load correct soul
-- [ ] Update `channels/telegram.ts` — call router before agent loop, prepend agent name to reply
-- [ ] Write initial soul files: at minimum `agents/main/soul.md` (general assistant) and one specialist agent to validate routing works
-- [ ] **Per-agent exec approvals** — update `exec-approvals.json` to key approvals by agent ID (e.g. `{ "main": ["mkdir ..."], "einstein": [] }`). Update `isApproved(agentId, command)` and `permanentlyApprove(agentId, command)` in `tools/approvals.ts`. Pass `agentId` through the confirm callback in `telegram.ts`. This ensures "always" approvals granted to one agent don't automatically apply to others.
-- [ ] End of Phase 3: `/research what is ReAct prompting?` routes to Scout with her own history; plain messages go to Jarvis; both can find each other's memory
+- [x] Create `~/.bot-workspace/agents/` directory with one subdirectory per agent, each containing `soul.md` *(done in Phase 1 — workspace.ts creates agents/ dir)*
+- [x] Update `config.json` schema to support `agents` map and `defaultAgent` *(done in Phase 1)*
+- [x] `agent/router.ts` — parse incoming message text, match against `triggerPrefix` fields, return `{ agentId, agentConfig, strippedMessage }`. Falls back to `defaultAgent` if no prefix matches
+- [x] `agent/prompt.ts` — already accepts agentId + agentConfig, loads soul from `~/.bot-workspace/agents/{agent-id}/soul.md` *(done in Phase 1)*
+- [x] `agent/loop.ts` — already accepts agentId + agentConfig, uses `sessionPrefix` as session key *(done in Phase 1)*
+- [x] Update `channels/telegram.ts` — extracted `setupBot()` shared logic, main bot uses router, `createAgentBots()` for dedicated per-agent bots
+- [x] Write initial soul files: Atlas (main), Einstein (physics), Wizard (wise old wizard), Coach (personal trainer) — all with distinct personalities and memory key prefixes
+- [x] **Per-agent exec approvals** — `exec-approvals.json` now keyed by agent ID (e.g. `{ "main": ["mkdir ..."], "einstein": [] }`). `isApproved(agentId, command)` and `permanentlyApprove(agentId, command)` updated. `agentId` passed through `executeTool()` → `loop.ts`. Auto-migrates old flat array format to new keyed format.
+- [x] **Dedicated bot per agent** — agents with `telegramToken` (env var name) get their own `Bot` instance at startup. `config.ts` resolves `process.env[name]` into `resolvedTelegramToken`. `index.ts` starts all agent bots alongside main bot. Each is hardwired to its agent, no router.
+- [x] `config.json` — added einstein (`/einstein`), wizard (`/wizard`), personal_trainer (`/coach`) agents
+- [x] `scratch.ts` — uses router for prefix-based agent selection, "reset" clears all sessions
+- [x] End of Phase 3: `/einstein how does gravity work?` routes to Einstein via prefix on main bot OR by messaging Einstein's dedicated bot directly; plain messages to main bot go to Atlas; all agents share memory. Verified via scratch — sessions isolated per agent.
 
 **Example interaction:**
 
@@ -101,6 +107,21 @@ You: What did Scout find about TypeScript?
 [Jarvis] [uses memory_search for "typescript"]
 [Jarvis] Scout found that the key practices are: using Result types, avoiding raw try/catch...
 ```
+
+---
+
+### Phase 3.5 — Rebrand to Open Wren
+
+Rename the project from OrionBot to **Open Wren**. Workspace directory changes from `~/.bot-workspace/` to `~/.openwren-workspace/`. The user will manually rename the project folder from `OrionBot` to `OpenWren`.
+
+- [ ] Update `config.json` — change `"workspace": "~/.bot-workspace"` to `"workspace": "~/.openwren-workspace"`
+- [ ] Update `config.ts` — change default workspace fallback from `~/.bot-workspace` to `~/.openwren-workspace`
+- [ ] Search all source files for any hardcoded references to `bot-workspace` and update them
+- [ ] Update `CLAUDE.md` — replace all references to `bot-workspace` with `openwren-workspace`, update project name/description
+- [ ] Update `Todo.md` — replace references to `bot-workspace` with `openwren-workspace` <---  This item one will be up to user not claude! Because We have to be careful here. 
+- [ ] Update `package.json` — change `name` field to `openwren`
+- [ ] Update console log messages — any `[boot]` or startup messages that reference "OrionBot" should say "Open Wren"
+- [ ] End of Phase 3.5: project runs as Open Wren, workspace at `~/.openwren-workspace/`, no references to OrionBot or bot-workspace remain in code. Old `~/.bot-workspace/` can be manually deleted — `initWorkspace()` recreates everything fresh on first run.
 
 ---
 

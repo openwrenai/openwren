@@ -13,6 +13,21 @@
     "main": {
       "name": "Atlas",
       "sessionPrefix": "agent:main"
+    },
+    "einstein": {
+      "name": "Einstein",
+      "sessionPrefix": "agent:einstein",
+      "triggerPrefix": "/einstein"
+    },
+    "wizard": {
+      "name": "Wizard",
+      "sessionPrefix": "agent:wizard",
+      "triggerPrefix": "/wizard"
+    },
+    "personal_trainer": {
+      "name": "Coach",
+      "sessionPrefix": "agent:personal_trainer",
+      "triggerPrefix": "/coach"
     }
   },
   "defaultAgent": "main",
@@ -25,13 +40,13 @@
     }
   },
   "session": {
-    "idleResetMinutes": 240
+    "idleResetMinutes": 0
   },
   "agent": {
     "maxIterations": 10,
     "compaction": {
       "enabled": true,
-      "contextWindowTokens": 200000,
+      "contextWindowTokens": 25000,
       "thresholdPercent": 80
     }
   },
