@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import * as fs from "fs";
 import * as path from "path";
-import { config, AgentConfig } from "../config";
+import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import { routeMessage } from "../agent/router";
 
@@ -36,7 +36,7 @@ export function getOwnerChatId(): number | null {
 export interface PendingCommand {
   command: string;
   toolCallId: string;
-  sessionKey: string;
+  userId: string;
   agentId: string;
   resolve: (approved: boolean | "always") => void;
 }
@@ -69,7 +69,7 @@ function formatForTelegram(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Shared bot setup — wires rate limiter, whitelist, confirmation flow,
+// Shared bot setup — wires rate limiter, authorization, confirmation flow,
 // message handler, and compaction notifications onto any Bot instance.
 //
 // fixedAgentId = null  → main bot, uses router to resolve agent per message
@@ -81,7 +81,7 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
   const rateLimitMap = new Map<number, number[]>();
 
   function isRateLimited(senderId: number): boolean {
-    const { maxMessages, windowSeconds } = config.telegram.rateLimit;
+    const { maxMessages, windowSeconds } = config.channels.rateLimit;
     const windowMs = windowSeconds * 1000;
     const now = Date.now();
 
@@ -111,19 +111,22 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
     await next();
   });
 
-  // Middleware — whitelist check
+  // Middleware — authorization via user channelIds lookup
   bot.use(async (ctx, next) => {
     const senderId = ctx.from?.id;
     if (!senderId) return;
 
-    if (!config.telegram.allowedUserIds.includes(senderId)) {
+    const userId = resolveUserId("telegram", senderId);
+    if (!userId) {
       console.log(`[telegram] Rejected message from unauthorized user: ${senderId}`);
-      if (config.telegram.unauthorizedBehavior === "reject") {
+      if (config.channels.unauthorizedBehavior === "reject") {
         await ctx.reply("Unauthorized.");
       }
       return;
     }
 
+    // Store userId on context for downstream handlers
+    (ctx as any).userId = userId;
     await next();
   });
 
@@ -132,6 +135,7 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
     const chatId = ctx.chat.id;
     const senderId = ctx.from.id;
     const text = ctx.message.text.trim();
+    const userId: string = (ctx as any).userId;
 
     // Persist chat ID on every message (idempotent)
     saveChatId(chatId);
@@ -184,7 +188,7 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
     // Show typing indicator
     await ctx.replyWithChatAction("typing");
 
-    console.log(`[telegram] Message from ${senderId} → ${agentConfig.name}: ${message}`);
+    console.log(`[telegram] Message from ${senderId} (${userId}) → ${agentConfig.name}: ${message}`);
 
     // Confirm callback — asks the user YES/NO/ALWAYS before destructive operations
     const confirm = (command: string): Promise<boolean | "always"> => {
@@ -196,7 +200,7 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
         setPendingConfirmation(chatId, {
           command,
           toolCallId: "",
-          sessionKey: agentConfig.sessionPrefix,
+          userId,
           agentId,
           resolve,
         });
@@ -204,7 +208,7 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
     };
 
     try {
-      const result = await runAgentLoop(agentId, agentConfig, message, confirm);
+      const result = await runAgentLoop(userId, agentId, agentConfig, message, confirm);
       console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
 
       if (result.compacted) {

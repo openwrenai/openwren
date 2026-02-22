@@ -5,11 +5,15 @@ import * as dotenv from "dotenv";
 
 dotenv.config({ override: true });
 
+export interface UserConfig {
+  displayName: string;
+  channelIds: Record<string, number | string>; // e.g. { telegram: 8300966403, discord: "..." }
+}
+
 export interface AgentConfig {
   name: string;
-  sessionPrefix: string;
   triggerPrefix?: string;
-  telegramToken?: string;  // resolved from env: {NAME}_TELEGRAM_TOKEN (e.g. EINSTEIN_TELEGRAM_TOKEN)
+  telegramToken?: string; // resolved from env: {NAME}_TELEGRAM_TOKEN (e.g. EINSTEIN_TELEGRAM_TOKEN)
 }
 
 export interface Config {
@@ -25,23 +29,25 @@ export interface Config {
   };
   agents: Record<string, AgentConfig>;
   defaultAgent: string;
-  telegram: {
-    allowedUserIds: number[];
-    unauthorizedBehavior: "silent" | "reject";  // silent = ignore, reject = reply "Unauthorized."
+  users: Record<string, UserConfig>;
+  channels: {
+    unauthorizedBehavior: "silent" | "reject";
     rateLimit: {
-      maxMessages: number;   // max messages allowed per sender in the window
-      windowSeconds: number; // sliding window size in seconds
+      maxMessages: number;
+      windowSeconds: number;
     };
   };
+  timezone: string;
   session: {
     idleResetMinutes: number;
+    dailyResetTime: string; // "" = disabled, "04:00" = reset at 04:00
   };
   agent: {
     maxIterations: number;
     compaction: {
       enabled: boolean;
-      contextWindowTokens: number; // total context window size for the model
-      thresholdPercent: number;    // compact when usage exceeds this % of the window
+      contextWindowTokens: number;
+      thresholdPercent: number;
     };
   };
   workspace: string;
@@ -77,6 +83,9 @@ function loadConfig(): Config {
   if (!raw.defaultAgent || !raw.agents[raw.defaultAgent]) {
     throw new Error("config.defaultAgent must reference a valid agent key");
   }
+  if (!raw.users || typeof raw.users !== "object") {
+    throw new Error("config.users must be an object");
+  }
 
   // Validate API key for selected provider
   if (raw.defaultProvider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
@@ -94,6 +103,12 @@ function loadConfig(): Config {
     }
   }
 
+  // Resolve timezone — fall back to system local if not set
+  if (!raw.timezone) {
+    raw.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    console.log(`[config] No timezone set — using system default: ${raw.timezone}`);
+  }
+
   const workspaceDir = resolveWorkspace(raw.workspace ?? "~/.bot-workspace");
 
   return {
@@ -103,3 +118,24 @@ function loadConfig(): Config {
 }
 
 export const config = loadConfig();
+
+// ---------------------------------------------------------------------------
+// User resolution — maps channel sender IDs to user IDs
+// ---------------------------------------------------------------------------
+
+/**
+ * Looks up which user owns the given sender ID on the given channel.
+ * Returns the userId (config key) or null if no match (unauthorized).
+ */
+export function resolveUserId(
+  channel: string,
+  senderId: number | string
+): string | null {
+  for (const [userId, userConfig] of Object.entries(config.users)) {
+    const channelId = userConfig.channelIds[channel];
+    if (channelId !== undefined && channelId == senderId) {
+      return userId;
+    }
+  }
+  return null;
+}

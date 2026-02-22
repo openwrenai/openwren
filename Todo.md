@@ -110,6 +110,62 @@ You: What did Scout find about TypeScript?
 
 ---
 
+### Phase 3.1 — Session Refactor + User System + Timestamps
+
+Restructure sessions into a user→agent folder hierarchy, add UTC timestamps to every message, archive sessions on compaction instead of overwriting, introduce a channel-agnostic user system in config.json, and globalize channel settings.
+
+**New session folder structure:**
+```
+sessions/{userId}/{agentId}/
+    active.jsonl              ← current active session
+    2026-02-22_18-05-43.jsonl ← archived compaction (UTC, zero-padded, includes seconds)
+```
+
+**New config structure:**
+```json
+{
+  "users": {
+    "owner": {
+      "displayName": "User 1",
+      "channelIds": {
+        "telegram": 0
+      }
+    }
+  },
+  "channels": {
+    "unauthorizedBehavior": "reject",
+    "rateLimit": {
+      "maxMessages": 20,
+      "windowSeconds": 60
+    }
+  },
+  "timezone": "Europe/Stockholm"
+}
+```
+
+**Key design decisions:**
+- User ID (`"owner"`) is the session folder name — channel-agnostic, same folder whether user messages from Telegram, Discord, or WhatsApp
+- Authorization: loop all users, check if any has matching channelId for the channel — replaces per-channel `allowedUserIds`
+- `sessionPrefix` dropped from agents — path derived from `{userId}/{agentId}`
+- Timestamps stored as UTC milliseconds in JSONL, converted to `[HH:MM]` local time before feeding to LLM
+- Archived files (`yyyy-mm-dd_hh-mm-ss.jsonl`) are UTC, zero-padded, include seconds to survive multiple compactions per minute
+- `dailyResetTime`: `""` = disabled, `"04:00"` = auto-reset at 04:00 in configured timezone
+- Timezone defaults to system local (`Intl.DateTimeFormat().resolvedOptions().timeZone`) if not set in config
+- Scratch sessions use `"local"` as userId → `sessions/local/{agentId}/active.jsonl`
+
+**Implementation checklist:**
+
+- [x] `config.json` — added `users`, `channels`, `timezone`, `dailyResetTime`. Removed `telegram` block, removed `sessionPrefix` from agents
+- [x] `config.ts` — new `UserConfig` interface, updated `Config` + `AgentConfig` (dropped `sessionPrefix`), added `resolveUserId(channel, senderId)`, timezone defaults to system local via `Intl.DateTimeFormat().resolvedOptions().timeZone`
+- [x] `history.ts` — folder-based paths `(userId, agentId)`, `TimestampedMessage` with UTC ms on every line, archive `active.jsonl` to `yyyy-mm-dd_hh-mm-ss.jsonl` before compaction, `injectTimestamps()` converts to `[HH:MM]` for LLM, `isDailyResetDue()`, all function signatures updated
+- [x] `loop.ts` — accepts `userId` param, passes to all history functions, injects timestamps into LLM copy before `provider.chat()`, daily reset check added
+- [x] `workspace.ts` — creates `sessions/{userId}/{agentId}/` dirs for each user+agent combo, plus `sessions/local/` for scratch
+- [x] `telegram.ts` — uses `resolveUserId("telegram", senderId)` for auth, reads from `config.channels`, passes `userId` to loop, `PendingCommand.sessionKey` replaced with `userId`
+- [x] `scratch.ts` — passes `"local"` as userId, reset clears by `(userId, agentId)` pairs
+- [x] End of Phase 3.1: sessions at `sessions/owner/main/active.jsonl`, timestamps in every JSONL line, compactions archived as dated files, authorization via user channelIds lookup
+
+---
+
 ### Phase 3.5 — Rebrand to Open Wren
 
 Rename the project from OrionBot to **Open Wren**. Workspace directory changes from `~/.bot-workspace/` to `~/.openwren-workspace/`. The user will manually rename the project folder from `OrionBot` to `OpenWren`.

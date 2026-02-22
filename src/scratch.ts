@@ -6,6 +6,8 @@
  * Use trigger prefixes to talk to other agents: /einstein, /wizard, /coach
  * Type "exit" or press Ctrl+C to quit.
  * Type "reset" to clear all session histories and start fresh.
+ *
+ * Scratch sessions use "local" as the userId — separate from real user sessions.
  */
 
 import * as readline from "readline";
@@ -14,6 +16,8 @@ import { initWorkspace } from "./workspace";
 import { runAgentLoop } from "./agent/loop";
 import { resetSession } from "./agent/history";
 import { routeMessage } from "./agent/router";
+
+const SCRATCH_USER_ID = "local";
 
 async function main() {
   // Ensure workspace dirs and soul files exist
@@ -51,8 +55,8 @@ async function main() {
       }
 
       if (raw.toLowerCase() === "reset") {
-        for (const agentConfig of Object.values(config.agents)) {
-          resetSession(agentConfig.sessionPrefix);
+        for (const agentId of Object.keys(config.agents)) {
+          resetSession(SCRATCH_USER_ID, agentId);
         }
         console.log("All sessions reset. Starting fresh.\n");
         prompt();
@@ -84,7 +88,7 @@ async function main() {
           });
         };
 
-        const result = await runAgentLoop(agentId, agentConfig, message, confirm);
+        const result = await runAgentLoop(SCRATCH_USER_ID, agentId, agentConfig, message, confirm);
 
         if (result.compacted) {
           console.log(`\n📦 Session compacted — older messages summarized.`);

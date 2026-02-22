@@ -11,36 +11,41 @@
   },
   "agents": {
     "main": {
-      "name": "Atlas",
-      "sessionPrefix": "agent:main"
+      "name": "Atlas"
     },
     "einstein": {
       "name": "Einstein",
-      "sessionPrefix": "agent:einstein",
       "triggerPrefix": "/einstein"
     },
     "wizard": {
       "name": "Wizard",
-      "sessionPrefix": "agent:wizard",
       "triggerPrefix": "/wizard"
     },
     "personal_trainer": {
       "name": "Coach",
-      "sessionPrefix": "agent:personal_trainer",
       "triggerPrefix": "/coach"
     }
   },
   "defaultAgent": "main",
-  "telegram": {
-    "allowedUserIds": [8300966403],
+  "users": {
+    "owner": {
+      "displayName": "User 1",
+      "channelIds": {
+        "telegram": 8300966403
+      }
+    }
+  },
+  "channels": {
     "unauthorizedBehavior": "reject",
     "rateLimit": {
       "maxMessages": 20,
       "windowSeconds": 60
     }
   },
+  "timezone": "Europe/Stockholm",
   "session": {
-    "idleResetMinutes": 0
+    "idleResetMinutes": 0,
+    "dailyResetTime": ""
   },
   "agent": {
     "maxIterations": 10,

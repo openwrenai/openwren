@@ -7,9 +7,12 @@ import {
   appendMessage,
   withSessionLock,
   isSessionIdleExpired,
+  isDailyResetDue,
   resetSession,
   compactIfNeeded,
   estimateTokens,
+  injectTimestamps,
+  TimestampedMessage,
 } from "./history";
 import { getToolDefinitions, executeTool, ConfirmFn } from "../tools";
 
@@ -17,35 +20,42 @@ const MAX_ITERATIONS = config.agent?.maxIterations ?? 10;
 
 export interface LoopResult {
   text: string;
-  compacted: boolean;       // compaction just ran this turn
-  nearThreshold: boolean;   // session is within 5% of compaction threshold
+  compacted: boolean;
+  nearThreshold: boolean;
 }
 
 /**
- * Run one full agent turn for the given agentId + message.
+ * Run one full agent turn for the given userId + agentId + message.
  * Handles session loading, locking, the ReAct loop, and session persistence.
  * Returns the reply text + compaction status flags.
  */
 export async function runAgentLoop(
+  userId: string,
   agentId: string,
   agentConfig: AgentConfig,
   userMessage: string,
   confirm?: ConfirmFn
 ): Promise<LoopResult> {
-  return withSessionLock(agentConfig.sessionPrefix, async () => {
+  return withSessionLock(userId, agentId, async () => {
     const provider = createProvider();
     const systemPrompt = loadSystemPrompt(agentId, agentConfig);
     const tools = getToolDefinitions();
 
     // Idle reset — if the session has been idle too long, start fresh
-    if (isSessionIdleExpired(agentConfig.sessionPrefix)) {
-      console.log(`[loop] Session idle expired, resetting: ${agentConfig.sessionPrefix}`);
-      resetSession(agentConfig.sessionPrefix);
+    if (isSessionIdleExpired(userId, agentId)) {
+      console.log(`[loop] Session idle expired, resetting: ${userId}/${agentId}`);
+      resetSession(userId, agentId);
+    }
+
+    // Daily reset — if we've crossed the daily reset boundary, start fresh
+    if (isDailyResetDue(userId, agentId)) {
+      console.log(`[loop] Daily reset triggered for: ${userId}/${agentId}`);
+      resetSession(userId, agentId);
     }
 
     // Load existing history, compact if needed, then append the new user message
-    let messages: Message[] = loadSession(agentConfig.sessionPrefix);
-    const compactionResult = await compactIfNeeded(agentConfig.sessionPrefix, messages, provider);
+    let messages: TimestampedMessage[] = loadSession(userId, agentId);
+    const compactionResult = await compactIfNeeded(userId, agentId, messages, provider);
     messages = compactionResult.messages;
 
     // Overflow check — reject if session + new message would exceed 100% of context window
@@ -61,9 +71,9 @@ export async function runAgentLoop(
       };
     }
 
-    const userMsg: Message = { role: "user", content: userMessage };
+    const userMsg: TimestampedMessage = { timestamp: Date.now(), role: "user", content: userMessage };
     messages.push(userMsg);
-    appendMessage(agentConfig.sessionPrefix, userMsg);
+    appendMessage(userId, agentId, userMsg);
 
     // ReAct loop
     let iterations = 0;
@@ -72,7 +82,10 @@ export async function runAgentLoop(
       iterations++;
       console.log(`[loop] Iteration ${iterations}/${MAX_ITERATIONS}`);
 
-      const response = await provider.chat(systemPrompt, messages, tools);
+      // Inject human-readable timestamps into a copy for the LLM — stored messages are untouched
+      const llmMessages = injectTimestamps(messages, config.timezone);
+
+      const response = await provider.chat(systemPrompt, llmMessages, tools);
 
       if (response.type === "error") {
         return {
@@ -84,12 +97,13 @@ export async function runAgentLoop(
 
       // Plain text response — we're done
       if (response.type === "text") {
-        const assistantMsg: Message = {
+        const assistantMsg: TimestampedMessage = {
+          timestamp: Date.now(),
           role: "assistant",
           content: response.text ?? "",
         };
         messages.push(assistantMsg);
-        appendMessage(agentConfig.sessionPrefix, assistantMsg);
+        appendMessage(userId, agentId, assistantMsg);
         return {
           text: response.text ?? "",
           compacted: compactionResult.compacted,
@@ -99,8 +113,8 @@ export async function runAgentLoop(
 
       // Tool use — execute each tool call and feed results back
       if (response.type === "tool_use" && response.toolCalls?.length) {
-        // Append the assistant's tool_use turn to history
-        const assistantToolMsg: Message = {
+        const assistantToolMsg: TimestampedMessage = {
+          timestamp: Date.now(),
           role: "assistant",
           content: response.toolCalls.map((tc) => ({
             type: "tool_use" as const,
@@ -110,9 +124,8 @@ export async function runAgentLoop(
           })),
         };
         messages.push(assistantToolMsg);
-        appendMessage(agentConfig.sessionPrefix, assistantToolMsg);
+        appendMessage(userId, agentId, assistantToolMsg);
 
-        // Execute all tool calls and collect results
         const toolResults = await Promise.all(
           response.toolCalls.map(async (tc) => {
             console.log(`[loop] Tool call: ${tc.name}`, tc.input);
@@ -126,24 +139,23 @@ export async function runAgentLoop(
           })
         );
 
-        // Append tool results as a user message (Anthropic's format)
-        const toolResultMsg: Message = {
+        const toolResultMsg: TimestampedMessage = {
+          timestamp: Date.now(),
           role: "user",
           content: toolResults,
         };
         messages.push(toolResultMsg);
-        appendMessage(agentConfig.sessionPrefix, toolResultMsg);
+        appendMessage(userId, agentId, toolResultMsg);
 
-        // Loop again — let the model process the tool results
         continue;
       }
     }
 
     // Hit the iteration cap
     const capMsg = `I got stuck in a loop after ${MAX_ITERATIONS} iterations and couldn't complete your request. Please try rephrasing or breaking it into smaller steps.`;
-    const assistantCapMsg: Message = { role: "assistant", content: capMsg };
+    const assistantCapMsg: TimestampedMessage = { timestamp: Date.now(), role: "assistant", content: capMsg };
     messages.push(assistantCapMsg);
-    appendMessage(agentConfig.sessionPrefix, assistantCapMsg);
+    appendMessage(userId, agentId, assistantCapMsg);
     return {
       text: capMsg,
       compacted: compactionResult.compacted,

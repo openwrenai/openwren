@@ -8,10 +8,17 @@ import { config } from "./config";
  *
  * ~/.bot-workspace/
  * ├── sessions/
+ * │   ├── {userId}/          ← one per user in config
+ * │   │   ├── main/          ← one per agent
+ * │   │   ├── einstein/
+ * │   │   └── wizard/
+ * │   └── local/             ← scratch/dev sessions
+ * │       ├── main/
+ * │       └── ...
  * ├── memory/
  * └── agents/
  *     └── main/
- *         └── soul.md   (created with default content if missing)
+ *         └── soul.md
  */
 export function initWorkspace(): void {
   const dirs = [
@@ -25,6 +32,19 @@ export function initWorkspace(): void {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
       console.log(`Created workspace directory: ${dir}`);
+    }
+  }
+
+  // Create session directories for each user + agent combo
+  const userIds = [...Object.keys(config.users), "local"]; // "local" for scratch sessions
+  const agentIds = Object.keys(config.agents);
+
+  for (const userId of userIds) {
+    for (const agentId of agentIds) {
+      const sessionDir = path.join(config.workspaceDir, "sessions", userId, agentId);
+      if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+      }
     }
   }
 
