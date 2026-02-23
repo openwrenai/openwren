@@ -51,7 +51,7 @@ export interface LLMProvider {
   ): Promise<LLMResponse>;
 }
 
-// Factory — returns the provider configured in config.json
+// Factory — returns the configured provider
 import { config } from "../config";
 import { AnthropicProvider } from "./anthropic";
 

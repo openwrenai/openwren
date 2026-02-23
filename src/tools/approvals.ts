@@ -12,7 +12,7 @@ function loadApprovals(): ApprovalsMap {
     const data = JSON.parse(fs.readFileSync(approvalsPath, "utf-8"));
     // Migrate from old flat array format → keyed object
     if (Array.isArray(data)) {
-      const migrated: ApprovalsMap = { main: data };
+      const migrated: ApprovalsMap = { atlas: data };
       saveApprovals(migrated);
       return migrated;
     }

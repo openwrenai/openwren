@@ -90,7 +90,7 @@ export const readFileToolDefinition: ToolDefinition = {
   name: "read_file",
   description:
     "Read the contents of a file or list a directory. " +
-    "Path is relative to the workspace directory (~/.bot-workspace). " +
+    "Path is relative to the workspace directory (~/.openwren). " +
     "Large files are truncated at 512 KB.",
   input_schema: {
     type: "object",
@@ -109,7 +109,7 @@ export const writeFileToolDefinition: ToolDefinition = {
   description:
     "Write content to a file. Creates the file and any missing parent directories. " +
     "Overwrites existing files. " +
-    "Path is relative to the workspace directory (~/.bot-workspace). " +
+    "Path is relative to the workspace directory (~/.openwren). " +
     "Requires user confirmation before execution.",
   input_schema: {
     type: "object",

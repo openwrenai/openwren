@@ -1,7 +1,7 @@
 import { config } from "./config";
 import { initWorkspace } from "./workspace";
 import { startGateway } from "./gateway/server";
-import { createTelegramBot, createAgentBots } from "./channels/telegram";
+import { createBots } from "./channels/telegram";
 
 async function main() {
   console.log("[boot] Starting OrionBot...");
@@ -15,21 +15,17 @@ async function main() {
   // Start Fastify gateway (health check + future webhook support)
   await startGateway();
 
-  // Start main Telegram bot (long polling, handles prefix routing)
-  const mainBot = createTelegramBot();
-  await mainBot.start({
-    onStart: (botInfo) => {
-      console.log(`[telegram] Main bot started: @${botInfo.username}`);
-      console.log(`[telegram] Send a message to your bot to begin.`);
-    },
-  });
-
-  // Start dedicated per-agent bots (if any have telegramToken configured)
-  const agentBots = createAgentBots();
-  for (const { bot, agentName } of agentBots) {
-    await bot.start({
+  // Start all Telegram bots — one per agent with a telegramToken
+  // bot.start() never resolves (blocks until stopped), so don't await
+  const bots = createBots();
+  for (const { bot, agentName, isDefault } of bots) {
+    bot.start({
       onStart: (botInfo) => {
-        console.log(`[telegram] ${agentName} bot started: @${botInfo.username}`);
+        if (isDefault) {
+          console.log(`[telegram] ${agentName} bot started (default): @${botInfo.username}`);
+        } else {
+          console.log(`[telegram] ${agentName} bot started: @${botInfo.username}`);
+        }
       },
     });
   }

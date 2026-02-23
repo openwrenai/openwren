@@ -241,40 +241,26 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
 }
 
 // ---------------------------------------------------------------------------
-// Main bot — handles default agent + prefix routing
-// ---------------------------------------------------------------------------
-
-export function createTelegramBot(): Bot {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    throw new Error("TELEGRAM_BOT_TOKEN is not set in environment");
-  }
-
-  const bot = new Bot(token);
-  setupBot(bot, null); // null = use router
-  return bot;
-}
-
-// ---------------------------------------------------------------------------
-// Per-agent dedicated bots — one per agent that has a telegramToken set
+// Create all Telegram bots — one per agent that has a telegramToken set
 // ---------------------------------------------------------------------------
 
 export interface AgentBot {
   bot: Bot;
   agentId: string;
   agentName: string;
+  isDefault: boolean;
 }
 
-export function createAgentBots(): AgentBot[] {
+export function createBots(): AgentBot[] {
   const bots: AgentBot[] = [];
 
   for (const [agentId, agentConfig] of Object.entries(config.agents)) {
     if (!agentConfig.telegramToken) continue;
 
+    const isDefault = agentId === config.defaultAgent;
     const bot = new Bot(agentConfig.telegramToken);
-    setupBot(bot, agentId);
-    bots.push({ bot, agentId, agentName: agentConfig.name });
-    console.log(`[telegram] Created dedicated bot for agent: ${agentConfig.name} (${agentId})`);
+    setupBot(bot, isDefault ? null : agentId); // default agent's bot uses router
+    bots.push({ bot, agentId, agentName: agentConfig.name, isDefault });
   }
 
   return bots;

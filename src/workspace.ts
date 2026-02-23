@@ -6,10 +6,10 @@ import { config } from "./config";
  * Ensures the workspace directory structure exists.
  * Called once at startup. Safe to call multiple times.
  *
- * ~/.bot-workspace/
+ * ~/.openwren/
  * ├── sessions/
  * │   ├── {userId}/          ← one per user in config
- * │   │   ├── main/          ← one per agent
+ * │   │   ├── atlas/          ← one per agent
  * │   │   ├── einstein/
  * │   │   └── wizard/
  * │   └── local/             ← scratch/dev sessions
@@ -17,7 +17,7 @@ import { config } from "./config";
  * │       └── ...
  * ├── memory/
  * └── agents/
- *     └── main/
+ *     └── atlas/
  *         └── soul.md
  */
 export function initWorkspace(): void {

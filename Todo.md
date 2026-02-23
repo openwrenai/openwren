@@ -166,18 +166,98 @@ sessions/{userId}/{agentId}/
 
 ---
 
+### Phase 3.2 — Externalize User Config (JSON5 + Dot-Notation)
+
+Move user configuration out of the project repository to `~/.openwren/openwren.json` so git pulls never overwrite custom settings. The file uses `.json` extension (for editor syntax highlighting) but is parsed as **JSON5** (comments, trailing commas). Users write **flat dot-notation keys** instead of managing deeply nested objects — a `deepSet()` helper injects each key into the full default config at the correct path. This phase also migrates the workspace directory from `~/.bot-workspace` to `~/.openwren`.
+
+**How it works:**
+
+1. All defaults live in code (`defaultConfig` object in `config.ts`) — always valid, always complete. Includes 4 pre-defined agents (Atlas, Einstein, Wizard, Coach) and one placeholder user (`owner`)
+2. User config at `~/.openwren/openwren.json` contains only overrides — flat dot-notation keys
+3. On boot: load defaults → load workspace `.env` → read user config → JSON5 parse → resolve `${env:VAR}` references → `deepSet()` each key into defaults → return final Config
+4. First run: if no user config exists, generate a template with commented-out examples
+
+**Example user config:**
+
+```json5
+{
+  // Provider
+  "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
+
+  // Me
+  "users.owner.displayName": "Niko",
+  "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}",
+
+  // Bot tokens
+  "agents.atlas.telegramToken": "${env:TELEGRAM_BOT_TOKEN}",
+  "agents.einstein.telegramToken": "${env:EINSTEIN_TELEGRAM_TOKEN}",
+  "agents.wizard.telegramToken": "${env:WIZARD_TELEGRAM_TOKEN}",
+
+  // Session
+  "timezone": "Europe/Stockholm",
+}
+```
+
+**Environment variable references (`${env:VAR}`):**
+
+Any string value in `openwren.json` can reference an env var using the `${env:VAR_NAME}` syntax. On boot, after JSON5 parsing but before `deepSet()`, a `resolveEnvRefs()` pass walks every string value and replaces `${env:...}` with the actual value from the environment. This keeps secrets out of the config file — safe to paste in a GitHub issue for debugging.
+
+The workspace `.env` file (`~/.openwren/.env`) is the **single source of truth** for all secrets — there is no project-root `.env`. Loaded via `dotenv` with `override: true` before resolving refs.
+
+```
+~/.openwren/
+  openwren.json        ← user config (safe to share)
+  .env                 ← secrets (OWNER_TELEGRAM_ID, tokens, API keys)
+```
+
+**Workspace path:** Hardcoded in code as `~/.openwren`. Not exposed to users.
+
+**Dependencies:** `json5` (small, well-maintained). No lodash — custom `deepSet()` helper (~10 lines).
+
+**Interface changes:**
+
+- `Config` — drop `workspace: string` field. Keep `workspaceDir: string` (resolved absolute path, set internally)
+- `AgentConfig` — `telegramToken` no longer auto-derived from agent name. Set explicitly in `openwren.json` via `${env:VAR}`. The old auto-derive convention is deleted — `resolveEnvRefs()` handles it generically
+- `UserConfig` — no changes. `resolveUserId()` uses `==` (loose comparison) so string values from `${env:...}` still match
+- Validation block — most checks removed (defaults are always valid). Only post-merge validation remains: `defaultAgent` references a real agent key, API key exists for selected provider
+
+**Implementation checklist:**
+
+- [x] `npm install json5`
+- [x] `config.ts` — define `defaultConfig` object with all fields and sensible defaults: 4 agents (Atlas, Einstein, Wizard, Coach), 1 placeholder user, all current settings
+- [x] `config.ts` — write `deepSet(obj, path, value)` helper for dot-notation injection
+- [x] `config.ts` — write `resolveEnvRefs(obj)` — recursively walk parsed JSON5 object, replace any string matching `${env:VAR_NAME}` with `process.env[VAR_NAME]`. Supports mixed strings like `"prefix_${env:TOKEN}_suffix"`. Warns on missing env vars (don't crash — log and leave the raw string so the user sees what's wrong)
+- [x] `config.ts` — rewrite `loadConfig()`: workspace `.env` is the single source of truth (no project-root `.env`). Boot: `ensureWorkspace()` → load `~/.openwren/.env` → read `openwren.json` → JSON5 parse → `resolveEnvRefs()` → `deepSet()` each key into defaults → post-process (timezone fallback, API key validation) → return final Config
+- [x] `config.ts` — delete the old per-agent Telegram token auto-derive loop. Telegram tokens are now set explicitly in `openwren.json` via `"agents.einstein.telegramToken": "${env:EINSTEIN_TELEGRAM_TOKEN}"` and resolved by the generic `resolveEnvRefs()` pass — no more magic naming convention
+- [x] `config.ts` — drop `workspace` from `Config` interface. `workspaceDir` is hardcoded as `~/.openwren`, never from config file
+- [x] `config.ts` — write config and `.env` templates with commented-out examples, generated on first run. Include `${env:...}` examples for sensitive fields
+- [x] `config.ts` — on first run (no workspace), create workspace dir + generate `openwren.json` template + generate `.env` template + log helpful messages
+- [x] Remove `config.json` from repo root — defaults now live in code
+- [x] Add `config.json` to `.gitignore`
+- [x] Update all source files — replace all references to `bot-workspace` with `openwren` (workspace.ts, filesystem.ts, prompt.ts, providers/index.ts)
+- [x] Suppress dotenv promotional log messages (`quiet: true`)
+- [x] Single `.env` — removed project-root `.env` loading, workspace `.env` (`~/.openwren/.env`) is the only source of secrets. `override: true` ensures env vars are set even if the shell pre-defines them
+- [x] `providers.anthropic.apiKey` — API key now flows through `openwren.json` via `${env:ANTHROPIC_API_KEY}`, not read directly from `process.env`. Anthropic provider reads from `config.providers.anthropic.apiKey`. Nothing reads `process.env` directly anymore (except `PORT` for the gateway server)
+- [x] Main bot token through config — `createTelegramBot()` reads token from `config.agents[config.defaultAgent].telegramToken` instead of `process.env.TELEGRAM_BOT_TOKEN`. All bot tokens configured the same way through `openwren.json`
+- [x] Unified bot startup — merged `createTelegramBot()` and `createAgentBots()` into single `createBots()`. One loop, all agents treated uniformly. Default agent's bot uses the router (prefix routing), others are hardwired. Fixed `bot.start()` blocking bug (`await` removed — grammY's `start()` never resolves)
+- [x] Rename agent ID `"main"` → `"atlas"` — default agent key is now `"atlas"` in `defaultConfig`, `defaultAgent: "atlas"`. Updated config template, approvals migration, workspace comments, `openwren.json`, and renamed workspace directories (`agents/main/` → `agents/atlas/`, `sessions/*/main/` → `sessions/*/atlas/`)
+- [x] Test: scratch and Telegram boot correctly with new config system
+- [x] Test: `${env:VAR}` values resolve correctly from workspace `.env`
+- [x] Test: all three dedicated agent bots (Atlas, Einstein, Wizard) start and respond via Telegram
+- [x] End of Phase 3.2: workspace at `~/.openwren/`, user config at `~/.openwren/openwren.json`, secrets in `~/.openwren/.env`, repo `config.json` is gone, `git pull` never touches user settings, config is safe to share publicly, all env var references flow through `openwren.json`
+
+---
+
 ### Phase 3.5 — Rebrand to Open Wren
 
-Rename the project from OrionBot to **Open Wren**. Workspace directory changes from `~/.bot-workspace/` to `~/.openwren-workspace/`. The user will manually rename the project folder from `OrionBot` to `OpenWren`.
+Cosmetic rebrand from OrionBot to **Open Wren**. The workspace directory (`~/.openwren/`) and all `bot-workspace` references in source code were already migrated in Phase 3.2. This phase handles the remaining project-level naming.
 
-- [ ] Update `config.json` — change `"workspace": "~/.bot-workspace"` to `"workspace": "~/.openwren-workspace"`
-- [ ] Update `config.ts` — change default workspace fallback from `~/.bot-workspace` to `~/.openwren-workspace`
-- [ ] Search all source files for any hardcoded references to `bot-workspace` and update them
-- [ ] Update `CLAUDE.md` — replace all references to `bot-workspace` with `openwren-workspace`, update project name/description
-- [ ] Update `Todo.md` — replace references to `bot-workspace` with `openwren-workspace` <---  This item one will be up to user not claude! Because We have to be careful here. 
 - [ ] Update `package.json` — change `name` field to `openwren`
+- [ ] Update `CLAUDE.md` — replace project name/description references from OrionBot to Open Wren
+- [ ] Update `Todo.md` — replace references to OrionBot with Open Wren <--- This item is up to user, not Claude! Be careful here.
 - [ ] Update console log messages — any `[boot]` or startup messages that reference "OrionBot" should say "Open Wren"
-- [ ] End of Phase 3.5: project runs as Open Wren, workspace at `~/.openwren-workspace/`, no references to OrionBot or bot-workspace remain in code. Old `~/.bot-workspace/` can be manually deleted — `initWorkspace()` recreates everything fresh on first run.
+- [ ] Verify: no references to "OrionBot" or "bot-workspace" remain in source code
+- [ ] End of Phase 3.5: project runs as Open Wren, no references to OrionBot remain in code. User manually renames project folder from `OrionBot` to `OpenWren`.
 
 ---
 
