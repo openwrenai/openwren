@@ -1,33 +1,8 @@
 import { Bot } from "grammy";
-import * as fs from "fs";
-import * as path from "path";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import { routeMessage } from "../agent/router";
-
-// ---------------------------------------------------------------------------
-// Chat ID persistence
-// ---------------------------------------------------------------------------
-
-const chatIdPath = path.join(config.workspaceDir, "telegram-chat-id.json");
-
-function saveChatId(chatId: number): void {
-  fs.writeFileSync(chatIdPath, JSON.stringify({ chatId }), "utf-8");
-}
-
-function loadChatId(): number | null {
-  if (!fs.existsSync(chatIdPath)) return null;
-  try {
-    const { chatId } = JSON.parse(fs.readFileSync(chatIdPath, "utf-8"));
-    return chatId ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export function getOwnerChatId(): number | null {
-  return loadChatId();
-}
+import type { Channel } from "./types";
 
 // ---------------------------------------------------------------------------
 // Pending confirmations
@@ -137,9 +112,6 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
     const text = ctx.message.text.trim();
     const userId: string = (ctx as any).userId;
 
-    // Persist chat ID on every message (idempotent)
-    saveChatId(chatId);
-
     // Check if we're waiting for a YES/NO confirmation
     const pending = pendingConfirmations.get(chatId);
     if (pending) {
@@ -241,27 +213,58 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
 }
 
 // ---------------------------------------------------------------------------
-// Create all Telegram bots — one per agent that has a telegramToken set
+// TelegramChannel — reads bindings from config.bindings.telegram
 // ---------------------------------------------------------------------------
 
-export interface AgentBot {
-  bot: Bot;
-  agentId: string;
-  agentName: string;
-  isDefault: boolean;
-}
+class TelegramChannel implements Channel {
+  readonly name = "telegram";
+  private bots: { bot: Bot; agentId: string }[] = [];
 
-export function createBots(): AgentBot[] {
-  const bots: AgentBot[] = [];
-
-  for (const [agentId, agentConfig] of Object.entries(config.agents)) {
-    if (!agentConfig.telegramToken) continue;
-
-    const isDefault = agentId === config.defaultAgent;
-    const bot = new Bot(agentConfig.telegramToken);
-    setupBot(bot, isDefault ? null : agentId); // default agent's bot uses router
-    bots.push({ bot, agentId, agentName: agentConfig.name, isDefault });
+  isConfigured(): boolean {
+    const bindings = config.bindings.telegram;
+    return !!bindings && Object.keys(bindings).length > 0;
   }
 
-  return bots;
+  start(): void {
+    const bindings = config.bindings.telegram;
+    if (!bindings) return;
+
+    for (const [agentId, token] of Object.entries(bindings)) {
+      const agentConfig = config.agents[agentId];
+      if (!agentConfig) {
+        console.warn(`[telegram] Binding for unknown agent "${agentId}" — skipping`);
+        continue;
+      }
+      if (!token) {
+        console.warn(`[telegram] Empty token for agent "${agentId}" — skipping`);
+        continue;
+      }
+
+      const isDefault = agentId === config.defaultAgent;
+      const bot = new Bot(token);
+      setupBot(bot, isDefault ? null : agentId); // default agent's bot uses router
+      this.bots.push({ bot, agentId });
+
+      // bot.start() never resolves (grammY polling) — don't await
+      bot.start({
+        onStart: (botInfo) => {
+          const label = isDefault
+            ? `${agentConfig.name} bot started (default)`
+            : `${agentConfig.name} bot started`;
+          console.log(`[telegram] ${label}: @${botInfo.username}`);
+        },
+      });
+    }
+  }
+
+  async stop(): Promise<void> {
+    for (const { bot } of this.bots) {
+      bot.stop();
+    }
+    this.bots = [];
+  }
+}
+
+export function createTelegramChannel(): Channel {
+  return new TelegramChannel();
 }

@@ -31,7 +31,7 @@ export interface UserConfig {
 export interface AgentConfig {
   name: string;
   triggerPrefix?: string;
-  telegramToken?: string; // set in openwren.json, literal or via ${env:VAR}
+  // No channel-specific fields. Bindings live in config.bindings.
 }
 
 export interface Config {
@@ -56,6 +56,7 @@ export interface Config {
       windowSeconds: number;
     };
   };
+  bindings: Record<string, Record<string, string>>; // bindings[channel][agentId] = credential
   timezone: string;
   session: {
     idleResetMinutes: number;
@@ -74,6 +75,8 @@ export interface Config {
 
 // ---------------------------------------------------------------------------
 // Default config — always valid, always complete
+// When updating this, also check src/templates/openwren.json and
+// src/templates/env.template to keep templates in sync.
 // ---------------------------------------------------------------------------
 
 const defaultConfig: Omit<Config, "workspaceDir"> = {
@@ -119,6 +122,7 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
       windowSeconds: 60,
     },
   },
+  bindings: {},
   timezone: "",
   session: {
     idleResetMinutes: 0,
@@ -190,85 +194,14 @@ function resolveEnvRefs(obj: any): any {
 }
 
 // ---------------------------------------------------------------------------
-// Config template generator — written on first run
+// Templates — read from src/templates/ at runtime
 // ---------------------------------------------------------------------------
 
-const CONFIG_TEMPLATE = `// ─────────────────────────────────────────────────
-// Open Wren — User Configuration
-// ─────────────────────────────────────────────────
-// Uncomment and edit any line to override defaults.
-// Dot-notation keys map into the nested config:
-//   "providers.anthropic.model" → config.providers.anthropic.model
-//
-// Secrets can reference env vars from ~/.openwren/.env:
-//   "users.owner.channelIds.telegram": "\${env:OWNER_TELEGRAM_ID}"
-//
-// Supports JSON5: comments, trailing commas, unquoted keys.
-// ─────────────────────────────────────────────────
-{
-  // --- Provider ---
-  // "defaultProvider": "anthropic",
-  // "providers.anthropic.model": "claude-sonnet-4-6",
-  // "providers.anthropic.apiKey": "\${env:ANTHROPIC_API_KEY}",
-  // "providers.ollama.model": "llama3.2",
-  // "providers.ollama.baseUrl": "http://localhost:11434",
+const TEMPLATES_DIR = path.join(__dirname, "templates");
 
-  // --- Agents ---
-  // "agents.atlas.name": "Atlas",
-  // "agents.einstein.name": "Einstein",
-  // "agents.einstein.triggerPrefix": "/einstein",
-  // "agents.wizard.name": "Wizard",
-  // "agents.wizard.triggerPrefix": "/wizard",
-  // "agents.personal_trainer.name": "Coach",
-  // "agents.personal_trainer.triggerPrefix": "/coach",
-  //
-  // Telegram bot tokens (one per agent):
-  // "agents.atlas.telegramToken": "\${env:TELEGRAM_BOT_TOKEN}",
-  // "agents.einstein.telegramToken": "\${env:EINSTEIN_TELEGRAM_TOKEN}",
-
-  // --- Users ---
-  // "users.owner.displayName": "Your Name",
-  // "users.owner.channelIds.telegram": "\${env:OWNER_TELEGRAM_ID}",
-
-  // --- Channels ---
-  // "channels.unauthorizedBehavior": "reject",
-  // "channels.rateLimit.maxMessages": 20,
-  // "channels.rateLimit.windowSeconds": 60,
-
-  // --- Session ---
-  // "timezone": "Europe/Stockholm",
-  // "session.idleResetMinutes": 0,
-  // "session.dailyResetTime": "",
-
-  // --- Agent Loop ---
-  // "agent.maxIterations": 10,
-  // "agent.compaction.enabled": true,
-  // "agent.compaction.contextWindowTokens": 25000,
-  // "agent.compaction.thresholdPercent": 80,
+function loadTemplate(filename: string): string {
+  return fs.readFileSync(path.join(TEMPLATES_DIR, filename), "utf-8");
 }
-`;
-
-const ENV_TEMPLATE = `# ─────────────────────────────────────────────────
-# Open Wren — Secrets
-# ─────────────────────────────────────────────────
-# Referenced from openwren.json via \${env:VAR_NAME}
-# This file is never committed or shared.
-# ─────────────────────────────────────────────────
-
-# LLM provider
-# ANTHROPIC_API_KEY=your_key_here
-
-# Telegram bot token (main bot)
-# TELEGRAM_BOT_TOKEN=your_token_here
-
-# Your Telegram user ID (for authorization)
-# OWNER_TELEGRAM_ID=123456789
-
-# Dedicated agent bot tokens (optional)
-# EINSTEIN_TELEGRAM_TOKEN=your_token_here
-# WIZARD_TELEGRAM_TOKEN=your_token_here
-# COACH_TELEGRAM_TOKEN=your_token_here
-`;
 
 // ---------------------------------------------------------------------------
 // loadConfig — boot sequence
@@ -282,13 +215,13 @@ function ensureWorkspace(): void {
 
   const configPath = path.join(WORKSPACE_DIR, "openwren.json");
   if (!fs.existsSync(configPath)) {
-    fs.writeFileSync(configPath, CONFIG_TEMPLATE, "utf-8");
+    fs.writeFileSync(configPath, loadTemplate("openwren.json"), "utf-8");
     console.log(`[boot] Generated openwren.json — edit to customize your setup`);
   }
 
   const envPath = path.join(WORKSPACE_DIR, ".env");
   if (!fs.existsSync(envPath)) {
-    fs.writeFileSync(envPath, ENV_TEMPLATE, "utf-8");
+    fs.writeFileSync(envPath, loadTemplate("env.template"), "utf-8");
     console.log(`[boot] Generated .env — add your API keys and tokens here`);
   }
 }
@@ -336,6 +269,17 @@ function loadConfig(): Config {
     throw new Error(
       `config.defaultAgent "${merged.defaultAgent}" does not match any agent key`
     );
+  }
+
+  // Validate bindings reference real agents
+  for (const [channelName, agentMap] of Object.entries(merged.bindings ?? {})) {
+    for (const agentId of Object.keys(agentMap as Record<string, string>)) {
+      if (!merged.agents[agentId]) {
+        console.warn(
+          `[config] Warning: bindings.${channelName}.${agentId} references unknown agent "${agentId}" — skipping`
+        );
+      }
+    }
   }
 
   return {

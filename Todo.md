@@ -21,6 +21,32 @@ Cosmetic rebrand from OrionBot to **Open Wren**. The workspace directory (`~/.op
 
 ----- If I ASK YOU TO INSERT NEW PHASE INSERT AFTER THIS LINE ------
 
+### Phase 3.6 — Channel Decoupling (Bindings Pattern)
+
+Decouple agents from channels using a bindings pattern. Agents become pure personality (zero channel fields), channels are pure transport, and bindings are the glue mapping agents to channels with credentials. `index.ts` calls a single `startChannels()` — no platform-specific knowledge.
+
+**Config shape change:**
+```json5
+// Before: tokens on agents
+"agents.atlas.telegramToken": "${env:TELEGRAM_BOT_TOKEN}",
+
+// After: channel-first bindings
+"bindings.telegram.atlas": "${env:TELEGRAM_BOT_TOKEN}",
+```
+
+- [x] `src/channels/types.ts` — NEW: `Channel` interface (`name`, `isConfigured()`, `start()`, `stop()`)
+- [x] `src/config.ts` — remove `telegramToken` from `AgentConfig`, add `bindings: Record<string, Record<string, string>>` to `Config` and `defaultConfig`, update config template with bindings section, add validation (warn on unknown agent in bindings), add migration warning for old `telegramToken` format
+- [x] `src/channels/telegram.ts` — replace `createBots()`/`AgentBot` with `TelegramChannel` class implementing `Channel`. Read from `config.bindings.telegram` instead of `agentConfig.telegramToken`. Export via `createTelegramChannel()` factory. Internal logic (rate limiting, auth, confirmation, formatting) unchanged
+- [x] `src/channels/index.ts` — NEW: barrel file. Imports all channel adapters, exports `startChannels()` which creates each, checks `isConfigured()`, and calls `start()`
+- [x] `src/index.ts` — replace `createBots` import and bot loop with single `startChannels()` call
+- [x] `CLAUDE.md` — update config examples, architecture diagram, project structure, Notes for Claude Code section
+- [x] User migration: `~/.openwren/openwren.json` — move `agents.*.telegramToken` to `bindings.telegram.*`
+- [x] Test: compile clean, all bots start, Telegram routing works, scratch unaffected, migration warning fires for old config format
+- [x] Extract `CONFIG_TEMPLATE` and `ENV_TEMPLATE` from `config.ts` into `src/templates/openwren.json` and `src/templates/env.template` — read via `fs.readFileSync` at runtime
+- [x] Remove migration warning for old `telegramToken` format (not needed — project not live yet)
+- [ ] **Note:** if we ever add a build step (e.g. `tsc` to `dist/`), template files in `src/templates/` won't be copied automatically — we'd need a copy step or bundler config to include them
+
+---
 
 ### Phase 4 — Ollama Support
 

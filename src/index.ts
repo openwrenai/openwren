@@ -1,7 +1,7 @@
 import { config } from "./config";
 import { initWorkspace } from "./workspace";
 import { startGateway } from "./gateway/server";
-import { createBots } from "./channels/telegram";
+import { startChannels } from "./channels";
 
 async function main() {
   console.log("[boot] Starting Open Wren...");
@@ -15,20 +15,8 @@ async function main() {
   // Start Fastify gateway (health check + future webhook support)
   await startGateway();
 
-  // Start all Telegram bots — one per agent with a telegramToken
-  // bot.start() never resolves (blocks until stopped), so don't await
-  const bots = createBots();
-  for (const { bot, agentName, isDefault } of bots) {
-    bot.start({
-      onStart: (botInfo) => {
-        if (isDefault) {
-          console.log(`[telegram] ${agentName} bot started (default): @${botInfo.username}`);
-        } else {
-          console.log(`[telegram] ${agentName} bot started: @${botInfo.username}`);
-        }
-      },
-    });
-  }
+  // Start all configured channels (Telegram, Discord, etc.)
+  startChannels();
 }
 
 main().catch((err) => {

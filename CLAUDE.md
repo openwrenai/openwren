@@ -8,9 +8,9 @@
 
 ## Overview
 
-A self-hosted personal AI assistant bot controlled via Telegram. Runs as a local Node.js gateway, connects to an LLM backend (Anthropic Claude or Ollama), and can execute tasks on your behalf — reading/writing files, running whitelisted shell commands, persistent memory across sessions.
+A self-hosted personal AI assistant bot controlled via messaging channels (Telegram, with Discord/WhatsApp planned). Runs as a local Node.js gateway, connects to an LLM backend (Anthropic Claude or Ollama), and can execute tasks on your behalf — reading/writing files, running whitelisted shell commands, persistent memory across sessions.
 
-Multiple agents with distinct personalities (Atlas, Einstein, Wizard, Coach), each optionally running as its own dedicated Telegram bot.
+Multiple agents with distinct personalities (Atlas, Einstein, Wizard, Coach). Agents are decoupled from channels — bindings connect agents to channels with credentials.
 
 ---
 
@@ -33,11 +33,11 @@ Core dependencies: `@anthropic-ai/sdk`, `grammy`, `fastify`, `dotenv`, `json5`.
 ## Architecture
 
 ```
-You (Telegram)
+You (Telegram / Discord / ...)
         │
    ┌────▼────────────────┐
-   │  Channel Layer       │  ← grammY bots (one per agent), auth, routing
-   │  (telegram.ts)       │
+   │  Channel Layer       │  ← Channel interface, adapters (Telegram, etc.), auth, routing
+   │  (channels/)         │
    └────────┬─────────────┘
             │
      ┌──────▼──────┐
@@ -73,11 +73,16 @@ Nothing reads `process.env` directly (except `PORT` for the gateway). Everything
   "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
   "users.owner.displayName": "Your Name",
   "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}",
-  "agents.atlas.telegramToken": "${env:TELEGRAM_BOT_TOKEN}",
-  "agents.einstein.telegramToken": "${env:EINSTEIN_TELEGRAM_TOKEN}",
+  "bindings.telegram.atlas": "${env:TELEGRAM_BOT_TOKEN}",
+  "bindings.telegram.einstein": "${env:EINSTEIN_TELEGRAM_TOKEN}",
   "timezone": "Europe/Stockholm",
 }
 ```
+
+**Bindings** connect agents to channels. Three separate concepts:
+- `agents.*` — pure personality (name, triggerPrefix). Zero channel awareness.
+- `channels.*` — shared transport settings (rate limit, auth behavior).
+- `bindings.*` — the glue. Channel-first layout: `bindings.telegram.atlas` = the Telegram bot token Atlas uses.
 
 On first run, `~/.openwren/` is created with template `openwren.json` and `.env` files.
 
@@ -122,13 +127,15 @@ The workspace path (`~/.openwren`) is hardcoded in code. Not user-configurable.
 
 ```
 src/
-├── index.ts               # Entry point — starts gateway + all Telegram bots
+├── index.ts               # Entry point — starts gateway + startChannels()
 ├── config.ts              # Config loader: defaults, JSON5 parse, deepSet, resolveEnvRefs
 ├── workspace.ts           # Ensures ~/.openwren/ directory structure exists
 ├── gateway/
 │   └── server.ts          # Fastify server, health check, future webhook support
 ├── channels/
-│   └── telegram.ts        # grammY bot setup, auth, routing, confirmation flow, createBots()
+│   ├── index.ts           # Barrel: startChannels() — creates and starts all configured channels
+│   ├── types.ts           # Channel interface (name, isConfigured, start, stop)
+│   └── telegram.ts        # Telegram adapter: TelegramChannel implements Channel
 ├── agent/
 │   ├── loop.ts            # Core ReAct loop (think → tool → think → respond)
 │   ├── history.ts         # JSONL session persistence, compaction, archival, timestamps, locking
@@ -160,7 +167,7 @@ Four pre-defined agents: **Atlas** (default, general assistant), **Einstein** (p
 
 **Routing:** Two ways to reach an agent:
 1. **Prefix routing** on the default agent's bot: `/einstein explain gravity` strips the prefix and routes to Einstein. Plain messages go to the default agent (`config.defaultAgent`).
-2. **Dedicated Telegram bot** per agent: each agent can have its own bot token set in `openwren.json`. Message it directly — no prefix needed.
+2. **Dedicated bot** per agent: each agent can have its own bot token via bindings in `openwren.json`. Message it directly — no prefix needed.
 
 **Adding a new agent requires zero code changes.** Only: create `~/.openwren/agents/{id}/soul.md` and add the agent to `openwren.json`.
 
@@ -205,7 +212,9 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 - **Agent name in replies** — prepend `[AgentName]` to every reply in `telegram.ts`, not in the loop. The loop is channel-agnostic
 - **Soul files** — load from `~/.openwren/agents/{agent-id}/soul.md` on every API call. Never cache — user edits take effect immediately
 - **Adding a new agent** — zero code changes. Create `~/.openwren/agents/{id}/soul.md`, add dot-notation keys in `openwren.json`. If adding an agent ever requires TypeScript changes, the abstraction is wrong
-- **Bot startup** — `createBots()` in `telegram.ts` creates all bots uniformly. The default agent's bot uses the router (prefix routing), others are hardwired. `bot.start()` never resolves — don't await it
+- **Channel decoupling** — agents have zero channel fields. Bindings (`config.bindings`) map channels to agents with credentials. Channel-first layout: `bindings.telegram.atlas` for O(1) lookup when a message arrives. Three concepts: agents (personality), channels (transport settings), bindings (glue)
+- **Channel interface** — each channel implements `Channel` from `channels/types.ts`. Barrel file `channels/index.ts` exports `startChannels()`. `index.ts` has no platform-specific knowledge. Adding a new channel = create adapter file + one import in the barrel
+- **Bot startup** — `TelegramChannel.start()` creates all bots from `config.bindings.telegram`. The default agent's bot uses the router (prefix routing), others are hardwired. grammY `bot.start()` never resolves — don't await it
 - **JSONL sessions** — append on each message, rewrite only on compaction. Compaction archives the old file before overwriting
 - **Compaction token estimate** — content-only character count ÷ 4. No tokenizer API calls. Trigger at 80% of context window
 - **Memory key namespacing** — agents prefix keys with their name (`atlas-user-prefs`, `einstein-physics`). Convention in soul files, not enforced in code

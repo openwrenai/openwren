@@ -1,0 +1,56 @@
+// ─────────────────────────────────────────────────
+// Open Wren — User Configuration
+// ─────────────────────────────────────────────────
+// Uncomment and edit any line to override defaults.
+// Dot-notation keys map into the nested config:
+//   "providers.anthropic.model" → config.providers.anthropic.model
+//
+// Secrets can reference env vars from ~/.openwren/.env:
+//   "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}"
+//
+// Supports JSON5: comments, trailing commas, unquoted keys.
+// ─────────────────────────────────────────────────
+{
+  // --- Provider ---
+  // "defaultProvider": "anthropic",
+  // "providers.anthropic.model": "claude-sonnet-4-6",
+  // "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
+  // "providers.ollama.model": "llama3.2",
+  // "providers.ollama.baseUrl": "http://localhost:11434",
+
+  // --- Agents ---
+  // "agents.atlas.name": "Atlas",
+  // "agents.einstein.name": "Einstein",
+  // "agents.einstein.triggerPrefix": "/einstein",
+  // "agents.wizard.name": "Wizard",
+  // "agents.wizard.triggerPrefix": "/wizard",
+  // "agents.personal_trainer.name": "Coach",
+  // "agents.personal_trainer.triggerPrefix": "/coach",
+
+  // --- Users ---
+  // "users.owner.displayName": "Your Name",
+  // "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}",
+
+  // --- Channels ---
+  // "channels.unauthorizedBehavior": "reject",
+  // "channels.rateLimit.maxMessages": 20,
+  // "channels.rateLimit.windowSeconds": 60,
+
+  // --- Bindings (connect agents to channels) ---
+  // "bindings.telegram.atlas": "${env:TELEGRAM_BOT_TOKEN}",
+  // "bindings.telegram.einstein": "${env:EINSTEIN_TELEGRAM_TOKEN}",
+  // "bindings.telegram.wizard": "${env:WIZARD_TELEGRAM_TOKEN}",
+  // "bindings.telegram.personal_trainer": "${env:COACH_TELEGRAM_TOKEN}",
+  // Future: "bindings.discord.atlas": "${env:ATLAS_DISCORD_TOKEN}",
+
+  // --- Session ---
+  // "timezone": "Europe/Stockholm",
+  // "session.idleResetMinutes": 0,
+  // "session.dailyResetTime": "",
+
+  // --- Agent Loop ---
+  // "agent.maxIterations": 10,
+  // "agent.compaction.enabled": true,
+  // "agent.compaction.contextWindowTokens": 25000,
+  // "agent.compaction.thresholdPercent": 80,
+}
