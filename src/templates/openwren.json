@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────
 // Uncomment and edit any line to override defaults.
 // Dot-notation keys map into the nested config:
-//   "providers.anthropic.model" → config.providers.anthropic.model
+//   "defaultModel" → config.defaultModel
 //
 // Secrets can reference env vars from ~/.openwren/.env:
 //   "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}"
@@ -11,17 +11,20 @@
 // Supports JSON5: comments, trailing commas, unquoted keys.
 // ─────────────────────────────────────────────────
 {
-  // --- Provider ---
-  // "defaultProvider": "anthropic",
-  // "providers.anthropic.model": "claude-sonnet-4-6",
+  // --- Model ---
+  // "defaultModel": "anthropic/claude-sonnet-4-6",
+  // "defaultFallback": "anthropic/claude-haiku-3-5",
+
+  // --- Provider credentials ---
   // "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
-  // "providers.ollama.model": "llama3.2",
   // "providers.ollama.baseUrl": "http://localhost:11434",
 
   // --- Agents ---
   // "agents.atlas.name": "Atlas",
   // "agents.einstein.name": "Einstein",
   // "agents.einstein.triggerPrefix": "/einstein",
+  // "agents.einstein.model": "anthropic/claude-sonnet-4-6",
+  // "agents.einstein.fallback": "anthropic/claude-haiku-3-5",
   // "agents.wizard.name": "Wizard",
   // "agents.wizard.triggerPrefix": "/wizard",
   // "agents.personal_trainer.name": "Coach",

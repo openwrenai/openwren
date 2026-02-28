@@ -28,21 +28,23 @@ export interface UserConfig {
   channelIds: Record<string, number | string>; // e.g. { telegram: 8300966403, discord: "..." }
 }
 
+/** Per-agent personality and model config. Channel-agnostic — bindings live in config.bindings. */
 export interface AgentConfig {
   name: string;
   triggerPrefix?: string;
-  // No channel-specific fields. Bindings live in config.bindings.
+  model?: string;    // "provider/model" override, e.g. "anthropic/claude-sonnet-4-6". Inherits defaultModel if unset.
+  fallback?: string; // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
 }
 
+/** Top-level application config. Loaded once at boot from ~/.openwren/openwren.json merged over defaults. */
 export interface Config {
-  defaultProvider: "anthropic" | "ollama";
+  defaultModel: string;    // "provider/model" format, e.g. "anthropic/claude-sonnet-4-6"
+  defaultFallback: string; // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
   providers: {
     anthropic: {
-      model: string;
-      apiKey: string;
+      apiKey: string;      // Credentials only — model selection moved to defaultModel / agents.*.model
     };
     ollama: {
-      model: string;
       baseUrl: string;
     };
   };
@@ -80,14 +82,13 @@ export interface Config {
 // ---------------------------------------------------------------------------
 
 const defaultConfig: Omit<Config, "workspaceDir"> = {
-  defaultProvider: "anthropic",
+  defaultModel: "anthropic/claude-sonnet-4-6",
+  defaultFallback: "",
   providers: {
     anthropic: {
-      model: "claude-sonnet-4-6",
       apiKey: "",
     },
     ollama: {
-      model: "llama3.2",
       baseUrl: "http://localhost:11434",
     },
   },
@@ -257,8 +258,19 @@ function loadConfig(): Config {
     console.log(`[config] No timezone set — using system default: ${merged.timezone}`);
   }
 
-  // Validate API key for selected provider
-  if (merged.defaultProvider === "anthropic" && !merged.providers.anthropic.apiKey) {
+  // Validate defaultModel format — must be "provider/model"
+  const defaultModelStr = merged.defaultModel as string;
+  if (!defaultModelStr || !defaultModelStr.includes("/")) {
+    throw new Error(
+      `config.defaultModel must be in "provider/model" format (e.g. "anthropic/claude-sonnet-4-6"), got: "${defaultModelStr}"`
+    );
+  }
+
+  // Validate API key if any model in the chain uses Anthropic
+  const usesAnthropic =
+    defaultModelStr.startsWith("anthropic/") ||
+    (merged.defaultFallback ?? "").includes("anthropic/");
+  if (usesAnthropic && !merged.providers.anthropic.apiKey) {
     throw new Error(
       'Anthropic API key not set. Add "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}" to openwren.json and set ANTHROPIC_API_KEY in ~/.openwren/.env'
     );

@@ -17,34 +17,30 @@ Move user configuration out of the project repository to `~/.openwren/openwren.j
 ### Phase 3.5 — Rebrand to Open Wren
 Cosmetic rebrand from OrionBot to **Open Wren**. The workspace directory (`~/.openwren/`) and all `bot-workspace` references in source code were already migrated in Phase 3.2. This phase handles the remaining project-level naming **and a full overhaul of CLAUDE.md** which is heavily outdated.
 
+### Phase 3.6 — Channel Decoupling (Bindings Pattern)
+Decouple agents from channels using a bindings pattern. Agents become pure personality (zero channel fields), channels are pure transport, and bindings are the glue mapping agents to channels with credentials. `index.ts` calls a single `startChannels()` — no platform-specific knowledge.
+
+**Note:** if we ever add a build step (e.g. `tsc` to `dist/`), template files in `src/templates/` won't be copied automatically — we'd need a copy step or bundler config to include them
+
 ## Left to do Phases
 
 ----- If I ASK YOU TO INSERT NEW PHASE INSERT AFTER THIS LINE ------
 
-### Phase 3.6 — Channel Decoupling (Bindings Pattern)
+### Phase 3.7 — Per-Agent Provider/Model with Cascading Fallbacks
 
-Decouple agents from channels using a bindings pattern. Agents become pure personality (zero channel fields), channels are pure transport, and bindings are the glue mapping agents to channels with credentials. `index.ts` calls a single `startChannels()` — no platform-specific knowledge.
+Add per-agent model selection and cascading fallback chains. Unified `"provider/model"` format (e.g. `"anthropic/claude-sonnet-4-6"`). Agents without a model inherit the global default. If the primary fails, fallbacks are tried in order.
 
-**Config shape change:**
-```json5
-// Before: tokens on agents
-"agents.atlas.telegramToken": "${env:TELEGRAM_BOT_TOKEN}",
-
-// After: channel-first bindings
-"bindings.telegram.atlas": "${env:TELEGRAM_BOT_TOKEN}",
-```
-
-- [x] `src/channels/types.ts` — NEW: `Channel` interface (`name`, `isConfigured()`, `start()`, `stop()`)
-- [x] `src/config.ts` — remove `telegramToken` from `AgentConfig`, add `bindings: Record<string, Record<string, string>>` to `Config` and `defaultConfig`, update config template with bindings section, add validation (warn on unknown agent in bindings), add migration warning for old `telegramToken` format
-- [x] `src/channels/telegram.ts` — replace `createBots()`/`AgentBot` with `TelegramChannel` class implementing `Channel`. Read from `config.bindings.telegram` instead of `agentConfig.telegramToken`. Export via `createTelegramChannel()` factory. Internal logic (rate limiting, auth, confirmation, formatting) unchanged
-- [x] `src/channels/index.ts` — NEW: barrel file. Imports all channel adapters, exports `startChannels()` which creates each, checks `isConfigured()`, and calls `start()`
-- [x] `src/index.ts` — replace `createBots` import and bot loop with single `startChannels()` call
-- [x] `CLAUDE.md` — update config examples, architecture diagram, project structure, Notes for Claude Code section
-- [x] User migration: `~/.openwren/openwren.json` — move `agents.*.telegramToken` to `bindings.telegram.*`
-- [x] Test: compile clean, all bots start, Telegram routing works, scratch unaffected, migration warning fires for old config format
-- [x] Extract `CONFIG_TEMPLATE` and `ENV_TEMPLATE` from `config.ts` into `src/templates/openwren.json` and `src/templates/env.template` — read via `fs.readFileSync` at runtime
-- [x] Remove migration warning for old `telegramToken` format (not needed — project not live yet)
-- [ ] **Note:** if we ever add a build step (e.g. `tsc` to `dist/`), template files in `src/templates/` won't be copied automatically — we'd need a copy step or bundler config to include them
+- [x] `src/config.ts` — `defaultProvider` → `defaultModel` (string), add `defaultFallback`, remove `providers.*.model`, add `model?`/`fallback?` to `AgentConfig`
+- [x] `src/providers/index.ts` — parsing utils (`parseProviderSpec`, `parseFallbackChain`), `resolveModelChain()`, `ProviderChain` class, replace `createProvider()` with `createProviderChain()`
+- [x] `src/providers/anthropic.ts` — constructor accepts `model: string` parameter
+- [x] `src/agent/loop.ts` — `createProvider()` → `createProviderChain(agentId)`
+- [x] `src/templates/openwren.json` — update template with new config shape
+- [x] `CLAUDE.md` — update config examples and provider docs
+- [x] `~/.openwren/openwren.json` — migrate user config to new format
+- [x] `src/providers/anthropic.ts` — add comments to `chat()` and constructor explaining what they do
+- [x] `src/providers/index.ts` — add comments above every interface, function, and class explaining purpose
+- [x] All new/modified functions across all files — add a comment above explaining what it does, purpose, etc
+- [x] Test: compile clean, boot with provider/model logs, fallback triggers on error, scratch works
 
 ---
 

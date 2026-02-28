@@ -5,7 +5,7 @@ import { startChannels } from "./channels";
 
 async function main() {
   console.log("[boot] Starting Open Wren...");
-  console.log(`[boot] Provider: ${config.defaultProvider}`);
+  console.log(`[boot] Default model: ${config.defaultModel}`);
   console.log(`[boot] Default agent: ${config.defaultAgent} (${config.agents[config.defaultAgent].name})`);
   console.log(`[boot] Workspace: ${config.workspaceDir}`);
 

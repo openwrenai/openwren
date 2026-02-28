@@ -21,7 +21,7 @@ Multiple agents with distinct personalities (Atlas, Einstein, Wizard, Coach). Ag
 | Runtime | Node.js (v22+), TypeScript |
 | Messaging | grammY (`grammy`) — modern Telegram Bot API wrapper |
 | HTTP | Fastify — lightweight internal API/webhook server |
-| LLM: Cloud | Anthropic SDK (`@anthropic-ai/sdk`) |
+| LLM: Cloud | Anthropic SDK (`@anthropic-ai/sdk`) — per-agent model selection with cascading fallbacks |
 | LLM: Local | Ollama REST API (Phase 4) |
 | Config | JSON5 (`json5`) — `~/.openwren/openwren.json` with dot-notation keys |
 | Env | `dotenv` — secrets in `~/.openwren/.env` |
@@ -70,17 +70,20 @@ Nothing reads `process.env` directly (except `PORT` for the gateway). Everything
 **Example openwren.json:**
 ```json5
 {
+  "defaultModel": "anthropic/claude-sonnet-4-6",
+  "defaultFallback": "anthropic/claude-haiku-3-5",
   "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
   "users.owner.displayName": "Your Name",
   "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}",
   "bindings.telegram.atlas": "${env:TELEGRAM_BOT_TOKEN}",
   "bindings.telegram.einstein": "${env:EINSTEIN_TELEGRAM_TOKEN}",
+  "agents.einstein.model": "anthropic/claude-sonnet-4-6",
   "timezone": "Europe/Stockholm",
 }
 ```
 
 **Bindings** connect agents to channels. Three separate concepts:
-- `agents.*` — pure personality (name, triggerPrefix). Zero channel awareness.
+- `agents.*` — pure personality (name, triggerPrefix) + optional model override. Zero channel awareness.
 - `channels.*` — shared transport settings (rate limit, auth behavior).
 - `bindings.*` — the glue. Channel-first layout: `bindings.telegram.atlas` = the Telegram bot token Atlas uses.
 
@@ -142,7 +145,7 @@ src/
 │   ├── router.ts          # Parses message prefix, resolves which agent handles it
 │   └── prompt.ts          # Loads soul.md for the resolved agent into system prompt
 ├── providers/
-│   ├── index.ts           # Provider interface + factory
+│   ├── index.ts           # Provider interface, ProviderChain (cascading fallbacks), model chain resolution
 │   └── anthropic.ts       # Anthropic Claude implementation
 ├── tools/
 │   ├── index.ts           # Tool registry, definitions, executor
@@ -205,6 +208,7 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 - Prefer **explicit over clever** — this codebase should be readable at a glance
 - Keep the agent loop in one file (`loop.ts`) so the control flow is obvious
 - Tool definitions and their executor functions live together in their respective files
+- **Provider chain** — `createProviderChain(agentId)` resolves the model chain (primary + fallbacks) and returns a `ProviderChain` that implements `LLMProvider`. The agent loop doesn't know it's talking to a chain. Inheritance: agent without `model` inherits `defaultModel` + `defaultFallback`. Agent with `model` but no `fallback` uses only that model. Agent with both uses its own chain
 - The provider abstraction is the most important seam — keep it clean
 - **Config system** — all defaults in `defaultConfig` in `config.ts`. User overrides via `~/.openwren/openwren.json` (JSON5, dot-notation). Secrets via `${env:VAR}` referencing `~/.openwren/.env`. Nothing reads `process.env` directly
 - **Confirmation flow** — stateful, lives in the channel layer (`telegram.ts`). `pendingConfirmations: Map<chatId, PendingCommand>`. The agent loop is not aware of this

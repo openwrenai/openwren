@@ -1,5 +1,5 @@
 import { config, AgentConfig } from "../config";
-import { createProvider } from "../providers";
+import { createProviderChain } from "../providers";
 import type { Message } from "../providers";
 import { loadSystemPrompt } from "./prompt";
 import {
@@ -37,7 +37,7 @@ export async function runAgentLoop(
   confirm?: ConfirmFn
 ): Promise<LoopResult> {
   return withSessionLock(userId, agentId, async () => {
-    const provider = createProvider();
+    const provider = createProviderChain(agentId);
     const systemPrompt = loadSystemPrompt(agentId, agentConfig);
     const tools = getToolDefinitions();
 
@@ -126,6 +126,7 @@ export async function runAgentLoop(
         messages.push(assistantToolMsg);
         appendMessage(userId, agentId, assistantToolMsg);
 
+        // Execute all tool calls in parallel and collect their results
         const toolResults = await Promise.all(
           response.toolCalls.map(async (tc) => {
             console.log(`[loop] Tool call: ${tc.name}`, tc.input);
