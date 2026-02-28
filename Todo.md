@@ -42,6 +42,13 @@ Add per-agent model selection and cascading fallback chains. Unified `"provider/
 - [x] All new/modified functions across all files — add a comment above explaining what it does, purpose, etc
 - [x] Test: compile clean, boot with provider/model logs, fallback triggers on error, scratch works
 
+### Phase 3.7.1 — Timestamp Date Fix
+
+Add dates to injected timestamps so agents can tell when days have passed between messages. `[HH:MM]` → `[Feb 28, HH:MM]`.
+
+- [x] `src/agent/history.ts` — update `injectTimestamps()` to include month+day in timestamp format
+- [x] Test: compile clean, verify timestamps show date in agent responses
+
 ---
 
 ### Phase 4 — Ollama Support

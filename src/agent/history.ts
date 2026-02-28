@@ -231,7 +231,10 @@ export function injectTimestamps(messages: TimestampedMessage[], timezone: strin
       return { role: msg.role, content: msg.content };
     }
 
-    const time = new Date(msg.timestamp).toLocaleTimeString("en-GB", {
+    const d = new Date(msg.timestamp);
+    const month = d.toLocaleDateString("en-US", { timeZone: timezone, month: "short" });
+    const day = d.toLocaleDateString("en-US", { timeZone: timezone, day: "numeric" });
+    const time = d.toLocaleTimeString("en-GB", {
       timeZone: timezone,
       hour: "2-digit",
       minute: "2-digit",
@@ -240,7 +243,7 @@ export function injectTimestamps(messages: TimestampedMessage[], timezone: strin
 
     return {
       role: msg.role,
-      content: `[${time}] ${msg.content}`,
+      content: `[${month} ${day}, ${time}] ${msg.content}`,
     };
   });
 }
