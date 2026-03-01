@@ -1,9 +1,10 @@
 import type { Channel } from "./types";
 import { createTelegramChannel } from "./telegram";
+import { createDiscordChannel } from "./discord";
 
 const all: Channel[] = [
   createTelegramChannel(),
-  // Future: createDiscordChannel(),
+  createDiscordChannel(),
   // Future: createWhatsAppChannel(),
 ];
 

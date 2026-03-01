@@ -33,6 +33,7 @@
   // --- Users ---
   // "users.owner.displayName": "Your Name",
   // "users.owner.channelIds.telegram": "${env:OWNER_TELEGRAM_ID}",
+  // "users.owner.channelIds.discord": "${env:OWNER_DISCORD_ID}",
 
   // --- Channels ---
   // "channels.unauthorizedBehavior": "reject",
@@ -44,7 +45,8 @@
   // "bindings.telegram.einstein": "${env:EINSTEIN_TELEGRAM_TOKEN}",
   // "bindings.telegram.wizard": "${env:WIZARD_TELEGRAM_TOKEN}",
   // "bindings.telegram.personal_trainer": "${env:COACH_TELEGRAM_TOKEN}",
-  // Future: "bindings.discord.atlas": "${env:ATLAS_DISCORD_TOKEN}",
+  // "bindings.discord.atlas": "${env:ATLAS_DISCORD_TOKEN}",
+  // "bindings.discord.einstein": "${env:EINSTEIN_DISCORD_TOKEN}",
 
   // --- Session ---
   // "timezone": "Europe/Stockholm",

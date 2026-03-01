@@ -49,6 +49,28 @@ Add dates to injected timestamps so agents can tell when days have passed betwee
 - [x] `src/agent/history.ts` — update `injectTimestamps()` to include month+day in timestamp format
 - [x] Test: compile clean, verify timestamps show date in agent responses
 
+### Phase 3.8 — Discord Channel
+
+Add Discord as a second messaging channel. Each bot hardwired to one agent — no prefix routing. DMs only.
+
+**Manual setup required before running:** Enable "Message Content Intent" in Discord Developer Portal → App → Bot → Privileged Gateway Intents.
+
+- [x] `npm install discord.js` — add dependency
+- [x] `src/channels/discord.ts` — `DiscordChannel implements Channel`. One `Client` per agent binding, DM-only filter, auth via `resolveUserId("discord", ...)`, rate limiting, confirmation flow (yes/no/always), typing indicator, agent name prepend, 2000-char message splitting, compaction notifications
+- [x] `src/channels/index.ts` — import and add `createDiscordChannel()` to the `all` array
+- [x] `src/templates/openwren.json` — add Discord binding and user ID examples
+- [x] `src/gateway/server.ts` — fix misleading comment
+- [x] `CLAUDE.md` — add `discord.js` to tech stack table, note Message Content Intent setup step
+- [ ] Test: compile clean, DM bot → agent responds, unauthorized user silently rejected, rate limit works
+
+### Phase 3.8.1 — Remove Prefix Routing from Telegram
+
+Each Telegram bot is already hardwired to its agent via bindings — the router is only called for the default agent's bot. Remove this: every bot is always hardwired to its fixed agent.
+
+- [ ] `src/channels/telegram.ts` — remove router call, all bots use fixed agentId
+- [ ] `src/agent/router.ts` — delete (dead code after this change)
+- [ ] Test: compile clean, each bot responds as its own agent only
+
 ---
 
 ### Phase 4 — Ollama Support
@@ -97,3 +119,82 @@ WhatsApp support via `@whiskeysockets/baileys` — the same package OpenClaw use
 - [ ] **Shell command whitelist review** — review the current whitelist in `tools/shell.ts` and consider trimming commands that aren't needed. Note: the whitelist is hardcoded in `shell.ts` right now — consider making it configurable via `config.json` so the user can add/remove commands without touching code.
 
 ---
+
+### Phase 8 — WebSocket Gateway
+
+Upgrade `gateway/server.ts` from a stub health check into a real WebSocket server. This is the foundation that CLI commands, Web UI, and future native apps all connect to. Channels continue to call `runAgentLoop()` directly — the WebSocket layer is for external clients to observe and interact with the running bot.
+
+- [ ] Add `ws` (or `@fastify/websocket`) alongside the existing Fastify HTTP server
+- [ ] Define internal typed event protocol: `message_in`, `message_out`, `agent_typing`, `session_compacted`, `agent_error`, `status`
+- [ ] Internal event bus — channels emit events when messages arrive and when responses go out
+- [ ] WS clients can subscribe to all events (for WebUI / CLI live view)
+- [ ] WS clients can send messages directly (bypass Telegram/Discord — useful for WebUI and CLI chat)
+- [ ] Auth for WS connections — token-based, secret set in config
+- [ ] Update `CLAUDE.md` with WebSocket architecture notes
+
+### Phase 9 — CLI Commands
+
+Add an `openwren` CLI that controls the running bot process. The CLI connects to the Phase 8 WebSocket gateway to query state and send commands. Basic commands implemented first as local process management (PID file), more advanced ones over WS.
+
+- [ ] `bin/openwren.ts` — CLI entry point, wired into `package.json` `bin` field
+- [ ] `openwren start` — spawns the bot as a background daemon, writes PID to `~/.openwren/openwren.pid`, redirects logs to `~/.openwren/openwren.log`
+- [ ] `openwren stop` — reads PID file, sends SIGTERM gracefully
+- [ ] `openwren restart` — stop + start
+- [ ] `openwren status` — connects to WS gateway, prints running agents, active channels, uptime
+- [ ] `openwren logs` — tails `~/.openwren/openwren.log`
+- [ ] `openwren chat <agent>` — interactive terminal chat session via WS (no Telegram needed for dev/testing)
+
+### Phase 10 — Installer / npm Packaging
+
+Package Open Wren for global install via npm. After this phase, users install with `npm install -g openwren` and never need to clone the repo or run `npm run start`.
+
+- [ ] Configure `package.json` `bin` field pointing to compiled CLI entry point
+- [ ] Build pipeline — `tsc` output to `dist/`, include templates in the package (copy step needed since tsc doesn't copy non-TS files)
+- [ ] `openwren init` command — first-run wizard that creates `~/.openwren/`, writes template `openwren.json` and `.env`, prints setup instructions
+- [ ] README with install + setup instructions for GitHub release
+- [ ] Verify `npm install -g .` works end-to-end: install → `openwren init` → `openwren start` → bot responds on Telegram
+
+### Phase 11 — Web UI (Dashboard)
+
+A local browser dashboard served by the Fastify server at `http://127.0.0.1:3000`. Connects to the Phase 8 WebSocket gateway. Accessible via `openwren dashboard` CLI command (opens browser). Token-auth at WS handshake — loopback connections auto-approved.
+
+**Chat & Sessions**
+- [ ] Chat interface — send messages, stream responses token-by-token, abort runs mid-stream
+- [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
+- [ ] Agent selector — switch between Atlas, Einstein, Wizard, etc.
+- [ ] Session list — browse all sessions per agent/user with last-active timestamps
+- [ ] Session history viewer — read full conversation transcript for any session
+- [ ] Session actions — reset session, force compaction, view archive list
+
+**Agents**
+- [ ] Agent list — all configured agents with name, model, status
+- [ ] Soul file editor — view and edit `~/.openwren/agents/{id}/soul.md` directly in the UI
+- [ ] Per-agent model override — change model/fallback without editing config file
+- [ ] Agent creation — add a new agent (creates soul.md stub, adds to config)
+
+**Memory**
+- [ ] Memory file browser — list all files in `~/.openwren/memory/`
+- [ ] Memory editor — view and edit individual memory files (markdown)
+- [ ] Memory delete — remove stale memory keys
+
+**Config**
+- [ ] Config editor — view and edit `~/.openwren/openwren.json` via form or raw JSON5
+- [ ] Config validation — show errors before saving, protect against concurrent edits
+- [ ] Restart prompt — notify when a config change requires restart to take effect
+
+**Channels & Status**
+- [ ] Channel status panel — show which channels are connected (Telegram, Discord) and their bot usernames
+- [ ] Per-channel connection health — last message received, error state if login failed
+
+**Usage & Monitoring**
+- [ ] Usage dashboard — token counts and estimated cost per session/agent/day
+- [ ] Live log tail — stream `~/.openwren/openwren.log` with text filter
+- [ ] System health — uptime, active agents, memory file count, session count
+
+**Execution Approvals**
+- [ ] Approval panel — view pending shell command confirmations and approve/reject from browser (alternative to replying yes/no in Telegram/Discord)
+- [ ] Allowlist editor — view and edit `exec-approvals.json` (permanently approved commands per agent)
+
+**Scheduled Tasks (Phase 7 prerequisite)**
+- [ ] Cron job list — view all scheduled tasks, last run time, next run time
+- [ ] Enable/disable/run-now controls per job

@@ -5,6 +5,7 @@
 - **Never run git commands unless explicitly asked to commit or push.** Editing files is fine; touching git is not unless the user says so.
 - **Always briefly summarize what you're about to do before prompting the user for permission.** One or two sentences max — what files, what change, why.
 - **Never add `Co-Authored-By` or contributor lines to commit messages.**
+- **Commit message format:** Subject line is `Phase X.Y: short title` (no conventional commits prefix like `feat:` or `fix:`). Body bullet-points what changed and why.
 
 ## Overview
 
@@ -19,14 +20,17 @@ Multiple agents with distinct personalities (Atlas, Einstein, Wizard, Coach). Ag
 | Layer | Choice |
 |---|---|
 | Runtime | Node.js (v22+), TypeScript |
-| Messaging | grammY (`grammy`) — modern Telegram Bot API wrapper |
-| HTTP | Fastify — lightweight internal API/webhook server |
+| Messaging: Telegram | grammY (`grammy`) — modern Telegram Bot API wrapper |
+| Messaging: Discord | discord.js (`discord.js`) — DM-only, one bot per agent, Message Content Intent required |
+| HTTP | Fastify — lightweight internal HTTP server (health check, future webhooks) |
 | LLM: Cloud | Anthropic SDK (`@anthropic-ai/sdk`) — per-agent model selection with cascading fallbacks |
 | LLM: Local | Ollama REST API (Phase 4) |
 | Config | JSON5 (`json5`) — `~/.openwren/openwren.json` with dot-notation keys |
 | Env | `dotenv` — secrets in `~/.openwren/.env` |
 
-Core dependencies: `@anthropic-ai/sdk`, `grammy`, `fastify`, `dotenv`, `json5`.
+Core dependencies: `@anthropic-ai/sdk`, `grammy`, `discord.js`, `fastify`, `dotenv`, `json5`.
+
+> **Discord setup:** Before running a Discord bot, enable **Message Content Intent** in the Discord Developer Portal → your app → Bot → Privileged Gateway Intents. Without it the bot receives no message text.
 
 ---
 
