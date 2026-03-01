@@ -22,37 +22,15 @@ Decouple agents from channels using a bindings pattern. Agents become pure perso
 
 **Note:** if we ever add a build step (e.g. `tsc` to `dist/`), template files in `src/templates/` won't be copied automatically — we'd need a copy step or bundler config to include them
 
-## Left to do Phases
-
------ If I ASK YOU TO INSERT NEW PHASE INSERT AFTER THIS LINE ------
-
 ### Phase 3.7 — Per-Agent Provider/Model with Cascading Fallbacks
 
 Add per-agent model selection and cascading fallback chains. Unified `"provider/model"` format (e.g. `"anthropic/claude-sonnet-4-6"`). Agents without a model inherit the global default. If the primary fails, fallbacks are tried in order.
-
-- [x] `src/config.ts` — `defaultProvider` → `defaultModel` (string), add `defaultFallback`, remove `providers.*.model`, add `model?`/`fallback?` to `AgentConfig`
-- [x] `src/providers/index.ts` — parsing utils (`parseProviderSpec`, `parseFallbackChain`), `resolveModelChain()`, `ProviderChain` class, replace `createProvider()` with `createProviderChain()`
-- [x] `src/providers/anthropic.ts` — constructor accepts `model: string` parameter
-- [x] `src/agent/loop.ts` — `createProvider()` → `createProviderChain(agentId)`
-- [x] `src/templates/openwren.json` — update template with new config shape
-- [x] `CLAUDE.md` — update config examples and provider docs
-- [x] `~/.openwren/openwren.json` — migrate user config to new format
-- [x] `src/providers/anthropic.ts` — add comments to `chat()` and constructor explaining what they do
-- [x] `src/providers/index.ts` — add comments above every interface, function, and class explaining purpose
-- [x] All new/modified functions across all files — add a comment above explaining what it does, purpose, etc
-- [x] Test: compile clean, boot with provider/model logs, fallback triggers on error, scratch works
 
 ### Phase 3.7.1 — Timestamp Date Fix
 
 Add dates to injected timestamps so agents can tell when days have passed between messages. `[HH:MM]` → `[Feb 28, HH:MM]`.
 
-- [x] `src/agent/history.ts` — update `injectTimestamps()` to include month+day in timestamp format
-- [x] Test: compile clean, verify timestamps show date in agent responses
-
 ### Phase 3.8 — Discord Channel
-
-Add Discord as a second messaging channel. Each bot hardwired to one agent — no prefix routing. DMs only.
-
 **Manual setup required before running:** Enable "Message Content Intent" in Discord Developer Portal → App → Bot → Privileged Gateway Intents.
 
 - [x] `npm install discord.js` — add dependency
@@ -62,6 +40,10 @@ Add Discord as a second messaging channel. Each bot hardwired to one agent — n
 - [x] `src/gateway/server.ts` — fix misleading comment
 - [x] `CLAUDE.md` — add `discord.js` to tech stack table, note Message Content Intent setup step
 - [ ] Test: compile clean, DM bot → agent responds, unauthorized user silently rejected, rate limit works
+
+Add Discord as a second messaging channel. Each bot hardwired to one agent — no prefix routing. DMs only.
+
+## Left to do Phases
 
 ### Phase 3.8.1 — Remove Prefix Routing from Telegram
 
