@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
+import { bus } from "../events";
 import type { Channel } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -136,8 +137,20 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
 
     if (!message) return;
 
+    // Bus: notify observers that a message arrived
+    bus.emit("message_in", {
+      channel: "telegram", userId, agentId, agentName: agentConfig.name,
+      text: message, timestamp: Date.now(),
+    });
+
     // Show typing indicator
     await ctx.replyWithChatAction("typing");
+
+    // Bus: notify observers that the agent is thinking
+    bus.emit("agent_typing", {
+      channel: "telegram", userId, agentId, agentName: agentConfig.name,
+      timestamp: Date.now(),
+    });
 
     console.log(`[telegram] Message from ${senderId} (${userId}) → ${agentConfig.name}: ${message}`);
 
@@ -162,7 +175,16 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
       const result = await runAgentLoop(userId, agentId, agentConfig, message, confirm);
       console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
 
+      // Bus: broadcast the agent's response to WS observers
+      bus.emit("message_out", {
+        channel: "telegram", userId, agentId, agentName: agentConfig.name,
+        text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
+        timestamp: Date.now(),
+      });
+
       if (result.compacted) {
+        // Bus: notify observers that session history was compacted
+        bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
         await ctx.reply("📦 Session compacted — older messages summarized.");
       }
 
@@ -182,6 +204,11 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
       }
     } catch (err) {
       console.error("[telegram] Error running agent loop:", err);
+      // Bus: notify observers that the agent loop failed
+      bus.emit("agent_error", {
+        channel: "telegram", userId, agentId, agentName: agentConfig.name,
+        error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+      });
       await ctx.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`, { parse_mode: "Markdown" });
     }
   });

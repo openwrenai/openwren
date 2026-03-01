@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials, ChannelType } from "discord.js";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
+import { bus } from "../events";
 import type { Channel } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -105,8 +106,20 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
       return;
     }
 
+    // Bus: notify observers that a message arrived
+    bus.emit("message_in", {
+      channel: "discord", userId, agentId, agentName: agentConfig.name,
+      text, timestamp: Date.now(),
+    });
+
     // Show typing indicator (lasts ~10 seconds in Discord)
     await message.channel.sendTyping();
+
+    // Bus: notify observers that the agent is thinking
+    bus.emit("agent_typing", {
+      channel: "discord", userId, agentId, agentName: agentConfig.name,
+      timestamp: Date.now(),
+    });
 
     console.log(`[discord] Message from ${senderId} (${userId}) → ${agentConfig.name}: ${text}`);
 
@@ -126,7 +139,16 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
         `[discord] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
       );
 
+      // Bus: broadcast the agent's response to WS observers
+      bus.emit("message_out", {
+        channel: "discord", userId, agentId, agentName: agentConfig.name,
+        text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
+        timestamp: Date.now(),
+      });
+
       if (result.compacted) {
+        // Bus: notify observers that session history was compacted
+        bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
         await message.channel.send("📦 Session compacted — older messages summarized.");
       }
 
@@ -149,6 +171,11 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
       }
     } catch (err) {
       console.error("[discord] Error running agent loop:", err);
+      // Bus: notify observers that the agent loop failed
+      bus.emit("agent_error", {
+        channel: "discord", userId, agentId, agentName: agentConfig.name,
+        error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+      });
       await message.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`);
     }
   });

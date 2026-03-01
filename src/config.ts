@@ -63,6 +63,9 @@ export interface Config {
     idleResetMinutes: number;
     dailyResetTime: string; // "" = disabled, "04:00" = reset at 04:00
   };
+  gateway: {
+    wsToken: string; // Bearer token for WS auth. Empty = WS disabled.
+  };
   agent: {
     maxIterations: number;
     compaction: {
@@ -120,6 +123,9 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
     },
   },
   bindings: {},
+  gateway: {
+    wsToken: "",
+  },
   timezone: "",
   session: {
     idleResetMinutes: 0,

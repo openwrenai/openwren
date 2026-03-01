@@ -32,40 +32,29 @@ Add dates to injected timestamps so agents can tell when days have passed betwee
 
 ### Phase 3.8 — Discord Channel
 **Manual setup required before running:** Enable "Message Content Intent" in Discord Developer Portal → App → Bot → Privileged Gateway Intents.
-
-- [x] `npm install discord.js` — add dependency
-- [x] `src/channels/discord.ts` — `DiscordChannel implements Channel`. One `Client` per agent binding, DM-only filter, auth via `resolveUserId("discord", ...)`, rate limiting, confirmation flow (yes/no/always), typing indicator, agent name prepend, 2000-char message splitting, compaction notifications
-- [x] `src/channels/index.ts` — import and add `createDiscordChannel()` to the `all` array
-- [x] `src/templates/openwren.json` — add Discord binding and user ID examples
-- [x] `src/gateway/server.ts` — fix misleading comment
-- [x] `CLAUDE.md` — add `discord.js` to tech stack table, note Message Content Intent setup step
-- [ ] Test: compile clean, DM bot → agent responds, unauthorized user silently rejected, rate limit works
-
 Add Discord as a second messaging channel. Each bot hardwired to one agent — no prefix routing. DMs only.
 
 ### Phase 3.8.1 — Remove Prefix Routing
 
 Removed the router abstraction entirely. Every bot (Telegram, Discord) is hardwired to exactly one agent via its binding — no prefix switching. `triggerPrefix` removed from `AgentConfig`.
 
-- [x] `src/channels/telegram.ts` — removed router import and `fixedAgentId` branch, all bots use fixed agentId/agentConfig passed to `setupBot()`
-- [x] `src/agent/router.ts` — deleted
-- [x] `src/config.ts` — removed `triggerPrefix` from `AgentConfig` interface and default agents
-- [x] `src/scratch.ts` — replaced router import with inline `parseAgentPrefix()` that does direct `config.agents[id]` lookup (dev REPL still supports `/<agentId>` syntax for convenience)
-- [x] Compile clean
-
-## Left to do Phases
 
 ### Phase 4 — WebSocket Gateway
 
-Upgrade `gateway/server.ts` from a stub health check into a real WebSocket server. Foundation for CLI commands, Web UI, and future native apps. Channels continue calling `runAgentLoop()` directly — WS is for external clients to observe and interact with the running bot.
+Added WebSocket support to the existing Fastify server. Internal event bus for cross-channel observability. WS clients can send messages to agents and receive all bus events. Foundation for CLI (Phase 5) and Web UI (Phase 10).
 
-- [ ] Add `@fastify/websocket` alongside the existing Fastify HTTP server
-- [ ] Define typed event protocol: `message_in`, `message_out`, `agent_typing`, `session_compacted`, `agent_error`, `status`
-- [ ] Internal event bus — channels emit events when messages arrive and when responses go out
-- [ ] WS clients can subscribe to all events (for WebUI / CLI live view)
-- [ ] WS clients can send messages directly (bypass Telegram/Discord — useful for WebUI and CLI chat)
-- [ ] Auth for WS connections — token-based, secret set in config
-- [ ] Update `CLAUDE.md` with WebSocket architecture notes
+- [x] `npm install @fastify/websocket` — WebSocket plugin for Fastify
+- [x] `src/events.ts` — typed event bus (`EventEmitter` singleton). Event protocol: `message_in`, `message_out`, `agent_typing`, `session_compacted`, `agent_error`, `status`, `confirm_request`
+- [x] `src/gateway/server.ts` — registered `@fastify/websocket` plugin, exported Fastify instance for WS channel to attach routes
+- [x] `src/channels/websocket.ts` — `WebSocketChannel` implements `Channel`. Token auth via `?token=` query param, rate limiting, confirmation flow via nonces, broadcasts bus events to all connected clients
+- [x] `src/channels/index.ts` — wired `createWebSocketChannel()` into channel array
+- [x] `src/channels/telegram.ts` + `discord.ts` — added bus event emissions (message_in, agent_typing, message_out, session_compacted, agent_error) as side effects
+- [x] `src/config.ts` — added `gateway.wsToken` to Config interface and defaults
+- [x] Templates — added `gateway.wsToken` to openwren.json template, `WS_TOKEN` to env.template
+- [x] `CLAUDE.md` — updated architecture diagram, project structure, tech stack, added event bus and WS channel docs
+- [x] Compile clean
+
+## Left to do Phases
 
 ### Phase 5 — CLI Commands
 

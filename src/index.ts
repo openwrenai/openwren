@@ -12,11 +12,13 @@ async function main() {
   // Ensure workspace directory structure exists
   initWorkspace();
 
-  // Start Fastify gateway (health check + future webhook support)
-  await startGateway();
-
-  // Start all configured channels (Telegram, Discord, etc.)
+  // Start all configured channels (Telegram, Discord, WebSocket, etc.)
+  // Must run before startGateway() so the WS channel can register its
+  // connection handler before Fastify starts listening.
   startChannels();
+
+  // Start Fastify gateway (health check, WebSocket /ws route)
+  await startGateway();
 }
 
 main().catch((err) => {
