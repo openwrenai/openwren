@@ -22,13 +22,10 @@
   // --- Agents ---
   // "agents.atlas.name": "Atlas",
   // "agents.einstein.name": "Einstein",
-  // "agents.einstein.triggerPrefix": "/einstein",
   // "agents.einstein.model": "anthropic/claude-sonnet-4-6",
   // "agents.einstein.fallback": "anthropic/claude-haiku-3-5",
   // "agents.wizard.name": "Wizard",
-  // "agents.wizard.triggerPrefix": "/wizard",
   // "agents.personal_trainer.name": "Coach",
-  // "agents.personal_trainer.triggerPrefix": "/coach",
 
   // --- Users ---
   // "users.owner.displayName": "Your Name",

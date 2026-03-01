@@ -1,7 +1,6 @@
 import { Bot } from "grammy";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
-import { routeMessage } from "../agent/router";
 import type { Channel } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -46,12 +45,10 @@ function formatForTelegram(text: string): string {
 // ---------------------------------------------------------------------------
 // Shared bot setup — wires rate limiter, authorization, confirmation flow,
 // message handler, and compaction notifications onto any Bot instance.
-//
-// fixedAgentId = null  → main bot, uses router to resolve agent per message
-// fixedAgentId = "xyz" → dedicated bot, always routes to that agent
+// Each bot is hardwired to exactly one agent via its binding.
 // ---------------------------------------------------------------------------
 
-function setupBot(bot: Bot, fixedAgentId: string | null): void {
+function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
   // Per-sender sliding window rate limiter
   const rateLimitMap = new Map<number, number[]>();
 
@@ -135,27 +132,9 @@ function setupBot(bot: Bot, fixedAgentId: string | null): void {
       return;
     }
 
-    // Resolve agent — either fixed (dedicated bot) or via router (main bot)
-    let agentId: string;
-    let agentConfig: AgentConfig;
-    let message: string;
+    const message = text;
 
-    if (fixedAgentId) {
-      agentId = fixedAgentId;
-      agentConfig = config.agents[fixedAgentId];
-      message = text;
-    } else {
-      const route = routeMessage(text);
-      agentId = route.agentId;
-      agentConfig = route.agentConfig;
-      message = route.message;
-    }
-
-    // Empty message after stripping prefix (e.g. user sent just "/einstein")
-    if (!message) {
-      await ctx.reply(`**${agentConfig.name}** is listening. Send a message after the prefix.`, { parse_mode: "Markdown" });
-      return;
-    }
+    if (!message) return;
 
     // Show typing indicator
     await ctx.replyWithChatAction("typing");
@@ -240,18 +219,14 @@ class TelegramChannel implements Channel {
         continue;
       }
 
-      const isDefault = agentId === config.defaultAgent;
       const bot = new Bot(token);
-      setupBot(bot, isDefault ? null : agentId); // default agent's bot uses router
+      setupBot(bot, agentId, agentConfig);
       this.bots.push({ bot, agentId });
 
       // bot.start() never resolves (grammY polling) — don't await
       bot.start({
         onStart: (botInfo) => {
-          const label = isDefault
-            ? `${agentConfig.name} bot started (default)`
-            : `${agentConfig.name} bot started`;
-          console.log(`[telegram] ${label}: @${botInfo.username}`);
+          console.log(`[telegram] ${agentConfig.name} bot started: @${botInfo.username}`);
         },
       });
     }

@@ -3,7 +3,7 @@
  * Run with: npm run scratch
  *
  * Type a message and press Enter to chat with the default agent (Atlas).
- * Use trigger prefixes to talk to other agents: /einstein, /wizard, /coach
+ * Use /<agentId> to talk to other agents: /einstein, /wizard, /personal_trainer
  * Type "exit" or press Ctrl+C to quit.
  * Type "reset" to clear all session histories and start fresh.
  *
@@ -11,26 +11,45 @@
  */
 
 import * as readline from "readline";
-import { config } from "./config";
+import { config, AgentConfig } from "./config";
 import { initWorkspace } from "./workspace";
 import { runAgentLoop } from "./agent/loop";
 import { resetSession } from "./agent/history";
-import { routeMessage } from "./agent/router";
 
 const SCRATCH_USER_ID = "local";
+
+/**
+ * Parse /<agentId> prefix from input. If the message starts with a known
+ * agent ID (e.g. "/einstein hello"), returns that agent and the rest of the
+ * message. Otherwise falls back to the default agent with the full input.
+ */
+function parseAgentPrefix(text: string): { agentId: string; agentConfig: AgentConfig; message: string } {
+  if (text.startsWith("/")) {
+    const spaceIdx = text.indexOf(" ");
+    const prefix = spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx);
+    const agentConfig = config.agents[prefix];
+    if (agentConfig) {
+      const message = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1);
+      return { agentId: prefix, agentConfig, message };
+    }
+  }
+
+  const agentId = config.defaultAgent;
+  return { agentId, agentConfig: config.agents[agentId], message: text };
+}
 
 async function main() {
   // Ensure workspace dirs and soul files exist
   initWorkspace();
 
   const defaultAgent = config.agents[config.defaultAgent];
-  const agentList = Object.entries(config.agents)
-    .filter(([, a]) => a.triggerPrefix)
-    .map(([, a]) => `${a.triggerPrefix} (${a.name})`)
+  const agentList = Object.keys(config.agents)
+    .filter((id) => id !== config.defaultAgent)
+    .map((id) => `/${id} (${config.agents[id].name})`)
     .join(", ");
 
   console.log(`\n🤖 Terminal REPL — default agent: "${defaultAgent.name}"`);
-  console.log(`   Agents: ${agentList || "none with prefixes"}`);
+  console.log(`   Agents: ${agentList || "none"}`);
   console.log(`   Workspace: ${config.workspaceDir}`);
   console.log(`   Type "exit" to quit, "reset" to clear all sessions.\n`);
 
@@ -63,8 +82,8 @@ async function main() {
         return;
       }
 
-      // Route to the correct agent based on prefix
-      const { agentId, agentConfig, message } = routeMessage(raw);
+      // Parse /<agentId> prefix — falls back to default agent
+      const { agentId, agentConfig, message } = parseAgentPrefix(raw);
 
       if (!message) {
         console.log(`\n${agentConfig.name} is listening. Send a message after the prefix.\n`);

@@ -31,7 +31,6 @@ export interface UserConfig {
 /** Per-agent personality and model config. Channel-agnostic — bindings live in config.bindings. */
 export interface AgentConfig {
   name: string;
-  triggerPrefix?: string;
   model?: string;    // "provider/model" override, e.g. "anthropic/claude-sonnet-4-6". Inherits defaultModel if unset.
   fallback?: string; // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
 }
@@ -98,15 +97,12 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
     },
     einstein: {
       name: "Einstein",
-      triggerPrefix: "/einstein",
     },
     wizard: {
       name: "Wizard",
-      triggerPrefix: "/wizard",
     },
     personal_trainer: {
       name: "Coach",
-      triggerPrefix: "/coach",
     },
   },
   defaultAgent: "atlas",

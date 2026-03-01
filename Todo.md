@@ -43,17 +43,17 @@ Add dates to injected timestamps so agents can tell when days have passed betwee
 
 Add Discord as a second messaging channel. Each bot hardwired to one agent — no prefix routing. DMs only.
 
+### Phase 3.8.1 — Remove Prefix Routing
+
+Removed the router abstraction entirely. Every bot (Telegram, Discord) is hardwired to exactly one agent via its binding — no prefix switching. `triggerPrefix` removed from `AgentConfig`.
+
+- [x] `src/channels/telegram.ts` — removed router import and `fixedAgentId` branch, all bots use fixed agentId/agentConfig passed to `setupBot()`
+- [x] `src/agent/router.ts` — deleted
+- [x] `src/config.ts` — removed `triggerPrefix` from `AgentConfig` interface and default agents
+- [x] `src/scratch.ts` — replaced router import with inline `parseAgentPrefix()` that does direct `config.agents[id]` lookup (dev REPL still supports `/<agentId>` syntax for convenience)
+- [x] Compile clean
+
 ## Left to do Phases
-
-### Phase 3.8.1 — Remove Prefix Routing from Telegram
-
-Each Telegram bot is already hardwired to its agent via bindings — the router is only called for the default agent's bot. Remove this: every bot is always hardwired to its fixed agent.
-
-- [ ] `src/channels/telegram.ts` — remove router call, all bots use fixed agentId
-- [ ] `src/agent/router.ts` — delete (dead code after this change)
-- [ ] Test: compile clean, each bot responds as its own agent only
-
----
 
 ### Phase 4 — WebSocket Gateway
 
