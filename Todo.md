@@ -54,19 +54,23 @@ Added WebSocket support to the existing Fastify server. Internal event bus for c
 - [x] `CLAUDE.md` — updated architecture diagram, project structure, tech stack, added event bus and WS channel docs
 - [x] Compile clean
 
-## Left to do Phases
-
 ### Phase 5 — CLI Commands
 
-Add an `openwren` CLI that controls the running bot process. Connects to the Phase 4 WebSocket gateway for status and live interaction. Basic commands use PID file management; advanced ones use WS.
+Standalone CLI for process management and interactive chat. No imports from the main app — starts fast, works even if config is broken. Dev usage: `npm run cli -- <command>`. After Phase 6 (packaging): `openwren <command>`.
 
-- [ ] `bin/openwren.ts` — CLI entry point, wired into `package.json` `bin` field
-- [ ] `openwren start` — spawns bot as background daemon, writes PID to `~/.openwren/openwren.pid`, redirects logs to `~/.openwren/openwren.log`
-- [ ] `openwren stop` — reads PID file, sends SIGTERM gracefully
-- [ ] `openwren restart` — stop + start
-- [ ] `openwren status` — connects to WS gateway, prints running agents, active channels, uptime
-- [ ] `openwren logs` — tails `~/.openwren/openwren.log`
-- [ ] `openwren chat <agent>` — interactive terminal chat session via WS (no Telegram needed for dev/testing)
+- [x] `src/cli.ts` — CLI entry point with command routing, wired into `package.json` `bin` field (`dist/cli.js`) and `cli` dev script
+- [x] `openwren start` — spawns bot as detached background daemon, writes PID to `~/.openwren/openwren.pid`, redirects stdout/stderr to `~/.openwren/openwren.log`
+- [x] `openwren stop` — reads PID file, sends SIGTERM, waits up to 5s, force-kills if needed, cleans PID file
+- [x] `openwren restart` — stop + start with port release pause
+- [x] `openwren status` — connects to WS gateway, prints agents, channels, uptime. Falls back to PID-only status if WS not configured
+- [x] `openwren logs` — tails `~/.openwren/openwren.log` with `tail -f -n 50`
+- [x] `openwren chat [agent]` — interactive terminal REPL via WS with confirmation flow (yes/no/always), error handling, compaction notices
+- [x] `src/index.ts` — SIGTERM/SIGINT graceful shutdown handler (stops channels, closes Fastify, cleans PID file)
+- [x] `src/channels/index.ts` — added `stopChannels()` for graceful shutdown
+- [x] Timestamped logging — `[YYYY-MM-DD HH:MM:SS]` prepended to all console.log/error output via override in `index.ts`
+- [x] Compile clean, all commands tested
+
+## Left to do Phases
 
 ### Phase 6 — Installer / npm Packaging
 

@@ -23,3 +23,16 @@ export function startChannels(): void {
     channel.start();
   }
 }
+
+/**
+ * Stop all channels gracefully. Called on SIGTERM/SIGINT for clean shutdown.
+ */
+export async function stopChannels(): Promise<void> {
+  for (const channel of all) {
+    try {
+      await channel.stop();
+    } catch (err) {
+      console.error(`[channels] Error stopping ${channel.name}:`, err);
+    }
+  }
+}

@@ -102,6 +102,8 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 ~/.openwren/
 ├── openwren.json                         # User config (safe to share publicly)
 ├── .env                                  # Secrets (API keys, bot tokens)
+├── openwren.pid                          # Daemon PID file (created by `openwren start`)
+├── openwren.log                          # Daemon log file (stdout/stderr redirect)
 ├── sessions/
 │   ├── {userId}/                         # One per user in config
 │   │   ├── atlas/
@@ -135,14 +137,15 @@ The workspace path (`~/.openwren`) is hardcoded in code. Not user-configurable.
 
 ```
 src/
-├── index.ts               # Entry point — starts gateway + startChannels()
+├── index.ts               # Entry point — timestamped logging, boot, SIGTERM/SIGINT shutdown
+├── cli.ts                 # Standalone CLI — start/stop/restart/status/logs/chat (no app imports)
 ├── config.ts              # Config loader: defaults, JSON5 parse, deepSet, resolveEnvRefs
 ├── events.ts              # Typed event bus (EventEmitter singleton) — channels emit, WS subscribes
 ├── workspace.ts           # Ensures ~/.openwren/ directory structure exists
 ├── gateway/
 │   └── server.ts          # Fastify server + @fastify/websocket plugin, health check, exports app instance
 ├── channels/
-│   ├── index.ts           # Barrel: startChannels() — creates and starts all configured channels
+│   ├── index.ts           # Barrel: startChannels() + stopChannels() for graceful shutdown
 │   ├── types.ts           # Channel interface (name, isConfigured, start, stop)
 │   ├── telegram.ts        # Telegram adapter: TelegramChannel implements Channel
 │   ├── discord.ts         # Discord adapter: DiscordChannel implements Channel (DM-only)
@@ -202,9 +205,28 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 - **Path:** `sessions/{userId}/{agentId}/active.jsonl`
 - **Locking:** Per-session mutex prevents race conditions from simultaneous messages.
 - **Compaction:** When token estimate exceeds 80% of context window, all messages are summarized into a single message. The original `active.jsonl` is archived as `yyyy-mm-dd_hh-mm-ss.jsonl` (UTC) before overwriting.
-- **Timestamps:** Stored as UTC ms in JSONL. Converted to `[HH:MM]` local time before feeding to the LLM via `injectTimestamps()`.
+- **Timestamps:** Stored as UTC ms in JSONL. Converted to `[Feb 28, HH:MM]` local time before feeding to the LLM via `injectTimestamps()`.
 - **Idle reset:** Optional — `session.idleResetMinutes` in config. 0 = disabled.
 - **Daily reset:** Optional — `session.dailyResetTime` (e.g. `"04:00"`) in configured timezone.
+
+---
+
+## CLI
+
+Standalone process manager and interactive client. Entry point: `src/cli.ts` (compiled: `dist/cli.js`). Dev: `npm run cli -- <command>`. After global install (Phase 6): `openwren <command>`.
+
+| Command | What it does |
+|---|---|
+| `start` | Spawn bot as detached daemon, write PID to `~/.openwren/openwren.pid`, redirect logs to `~/.openwren/openwren.log` |
+| `stop` | Read PID file, send SIGTERM, wait up to 5s, force-kill if needed |
+| `restart` | Stop + start |
+| `status` | Connect to WS gateway, print agents/channels/uptime. Falls back to PID-only if WS not configured |
+| `logs` | Tail `~/.openwren/openwren.log` with `tail -f -n 50` |
+| `chat [agent]` | Interactive terminal REPL via WS. Supports tool confirmation (yes/no/always) |
+
+Two run modes:
+- **`npm run dev`** — foreground, logs to terminal, Ctrl+C to stop
+- **`npm run cli -- start`** — background daemon, logs to file, managed via CLI commands
 
 ---
 
@@ -228,8 +250,9 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 - **JSONL sessions** — append on each message, rewrite only on compaction. Compaction archives the old file before overwriting
 - **Compaction token estimate** — content-only character count ÷ 4. No tokenizer API calls. Trigger at 80% of context window
 - **Memory key namespacing** — agents prefix keys with their name (`atlas-user-prefs`, `einstein-physics`). Convention in soul files, not enforced in code
-- Core dependencies: `@anthropic-ai/sdk`, `grammy`, `discord.js`, `fastify`, `@fastify/websocket`, `dotenv`, `json5`
-- For Ollama: test with `qwen3:8b` or `llama3.2` first — best function calling support among open-source models
+- **CLI** — `src/cli.ts` is completely standalone. It imports zero modules from the main app (no config, no events, nothing). This is deliberate — it must start fast and work even if config validation fails. It reads `~/.openwren/.env` directly (line-by-line parse) for the WS token. Dev usage: `npm run cli -- <command>`
+- **Timestamped logging** — `console.log` and `console.error` are overridden once in `index.ts` to prepend `[YYYY-MM-DD HH:MM:SS]`. Every module gets timestamps for free — no per-file changes needed
+- **Graceful shutdown** — `index.ts` registers SIGTERM/SIGINT handlers that call `stopChannels()`, close Fastify, and clean up the PID file. Triggered by `openwren stop` or Ctrl+C in foreground mode
 
 ---
 
@@ -242,4 +265,4 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 - All secrets in `~/.openwren/.env`, referenced via `${env:VAR}` — config file is safe to share
 - Sandbox all file operations to the workspace directory
 - Treat all inbound content (web pages, search results) as potentially adversarial
-- For WhatsApp (Phase 6): only ever install `@whiskeysockets/baileys` — never forks or similarly named packages
+- For WhatsApp (Phase 11): only ever install `@whiskeysockets/baileys` — never forks or similarly named packages
