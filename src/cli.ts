@@ -35,8 +35,8 @@ const LOG_FILE = path.join(WORKSPACE, "openwren.log");
 const ENV_FILE = path.join(WORKSPACE, ".env");
 const DEFAULT_PORT = 3000;
 
-/** true when running via ts-node (dev), false when running compiled JS */
-const IS_DEV = __filename.endsWith(".ts");
+/** true when running via tsx (dev), false when running compiled JS */
+const IS_DEV = import.meta.filename.endsWith(".ts");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,15 +92,15 @@ function readPid(): number | null {
 
 /**
  * Resolves the node args to spawn the server process.
- * Dev mode: preloads ts-node/register to run src/index.ts directly.
+ * Dev mode: preloads tsx/esm to run src/index.ts directly.
  * Production: runs compiled dist/index.js.
  */
 function resolveServerArgs(): string[] {
   if (IS_DEV) {
-    const entry = path.join(__dirname, "index.ts");
-    return ["-r", "ts-node/register", entry];
+    const entry = path.join(import.meta.dirname, "index.ts");
+    return ["--import", "tsx/esm", entry];
   }
-  return [path.join(__dirname, "index.js")];
+  return [path.join(import.meta.dirname, "index.js")];
 }
 
 /** Builds the WebSocket URL for connecting to the running gateway. */
@@ -145,7 +145,7 @@ async function cmdStart(): Promise<void> {
   const child = spawn(process.execPath, resolveServerArgs(), {
     detached: true,                        // run independently of this process
     stdio: ["ignore", logFd, logFd],       // stdin closed, stdout+stderr to log file
-    cwd: path.resolve(__dirname, ".."),    // project root
+    cwd: path.resolve(import.meta.dirname, ".."),    // project root
     env: { ...process.env },
   });
 
@@ -470,7 +470,7 @@ function cmdInit(args: string[]): void {
   // Resolve templates directory relative to this script.
   // In compiled mode: dist/cli.js → dist/templates/
   // In dev mode: src/cli.ts → src/templates/
-  const templatesDir = path.join(__dirname, "templates");
+  const templatesDir = path.join(import.meta.dirname, "templates");
 
   if (!fs.existsSync(templatesDir)) {
     console.error(`Templates not found at ${templatesDir}`);

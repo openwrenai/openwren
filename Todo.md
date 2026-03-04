@@ -57,6 +57,38 @@ First proper README for the npm package and GitHub repo. Covers install, setup, 
 
 ## Left to do Phases
 
+### Phase 6.2 — Switch to ES Modules (via tsup bundler)
+
+Migrate from CommonJS to ESM using `tsup` as the bundler. `tsc` becomes type-check only (`noEmit: true`). The bundler handles all module resolution — no `.js` extensions needed anywhere in source.
+
+- [x] `npm install --save-dev tsup tsx` — bundler + ts-node replacement for dev
+- [x] `tsup.config.ts` — two entry points (`src/index.ts`, `src/cli.ts`), ESM output, copy templates, shebang on cli
+- [x] `tsconfig.json` — add `"noEmit": true`, `"allowImportingTsExtensions": true`; tsc is now type-check only
+- [x] `package.json` — `"type": "module"`, replace `ts-node` with `tsx` in `dev`/`cli`/`scratch` scripts, replace `tsc` build with `tsup`
+- [x] `src/config.ts` — `__dirname` → `import.meta.dirname`
+- [x] `src/cli.ts` — `__dirname` → `import.meta.dirname`, `__filename` → `import.meta.filename`, update `resolveServerArgs()` dev branch from `-r ts-node/register` → `--import tsx` (keeps `openwren start` working in dev mode)
+- [x] Remove `ts-node` from devDependencies
+
+**Verify (dev mode via `npm run cli --`):**
+- [x] `npm run build` compiles clean
+- [ ] `npm run dev` starts and responds to a message
+- [x] `npm run cli -- init --force` creates workspace files (use `OPENWREN_HOME=~/.openwren-test`)
+- [x] `npm run cli -- start` spawns daemon
+- [x] `npm run cli -- status` connects and shows agents/uptime
+- [ ] `npm run cli -- logs` tails the log file
+- [ ] `npm run cli -- chat` works via WebSocket
+- [x] `npm run cli -- stop` stops the daemon cleanly
+
+**Verify (production via globally installed `openwren`):**
+- [x] `npm run build && npm install -g .` installs successfully
+- [x] `OPENWREN_HOME=~/.openwren-test openwren init --force` creates workspace files
+- [x] `OPENWREN_HOME=~/.openwren-test openwren start` spawns daemon
+- [x] `OPENWREN_HOME=~/.openwren-test openwren status` shows agents/uptime
+- [ ] `OPENWREN_HOME=~/.openwren-test openwren logs` tails the log file
+- [ ] `OPENWREN_HOME=~/.openwren-test openwren chat` works via WebSocket
+- [x] `OPENWREN_HOME=~/.openwren-test openwren stop` stops the daemon cleanly
+- [x] Clean up: `rm -rf ~/.openwren-test`
+
 ### Phase 7 — Ollama Support
 
 Add local LLM support via Ollama. Same `LLMProvider` interface — the agent loop doesn't know or care.

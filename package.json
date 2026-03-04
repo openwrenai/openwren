@@ -1,6 +1,6 @@
 {
   "name": "openwren",
-  "version": "2026.3.4-1",
+  "version": "2026.3.4-2",
   "description": "Self-hosted personal AI assistant bot with multi-channel support (Telegram, Discord, WebSocket)",
   "main": "dist/index.js",
   "bin": {
@@ -11,11 +11,12 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc && rm -rf dist/templates && cp -r src/templates dist/templates",
+    "build": "rm -rf dist && tsup && cp -r src/templates dist/templates",
+    "typecheck": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "cli": "ts-node src/cli.ts",
-    "scratch": "ts-node src/scratch.ts"
+    "dev": "tsx src/index.ts",
+    "cli": "tsx src/cli.ts",
+    "scratch": "tsx src/scratch.ts"
   },
   "keywords": [
     "ai",
@@ -35,13 +36,14 @@
     "url": "git+https://github.com/openwrenai/openwren.git"
   },
   "homepage": "https://github.com/openwrenai/openwren",
-  "type": "commonjs",
+  "type": "module",
   "engines": {
     "node": ">=22.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
-    "ts-node": "^10.9.2",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {

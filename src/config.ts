@@ -200,7 +200,7 @@ function resolveEnvRefs(obj: any): any {
 // Templates — read from src/templates/ at runtime
 // ---------------------------------------------------------------------------
 
-const TEMPLATES_DIR = path.join(__dirname, "templates");
+const TEMPLATES_DIR = path.join(import.meta.dirname, "templates");
 
 function loadTemplate(filename: string): string {
   return fs.readFileSync(path.join(TEMPLATES_DIR, filename), "utf-8");
