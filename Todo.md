@@ -74,13 +74,17 @@ Standalone CLI for process management and interactive chat. No imports from the 
 
 ### Phase 6 — Installer / npm Packaging
 
-Package Open Wren for global install. After this phase, users run `npm install -g openwren` and never need to clone the repo.
+Package Open Wren for global install via `npm install -g openwren`. Versioning: CalVer `YYYY.M.D` (date-based).
 
-- [ ] Configure `package.json` `bin` field pointing to compiled CLI entry point
-- [ ] Build pipeline — `tsc` to `dist/`, copy step for template files (tsc doesn't copy non-TS files)
-- [ ] `openwren init` command — first-run wizard: creates `~/.openwren/`, writes template `openwren.json` and `.env`, prints setup instructions
-- [ ] README with install + setup instructions for GitHub release
-- [ ] Verify `npm install -g .` works end-to-end: install → `openwren init` → `openwren start` → bot responds on Telegram
+Claude go step by step here and after each task ask user to check everything looks good so far. do not do all items at once, very important!
+
+- [x] `OPENWREN_HOME` env var — override workspace path (defaults to `~/.openwren`). Updated `config.ts` + `cli.ts`
+- [x] `package.json` metadata — description, repository, keywords, author, license, `files` field (ship only `dist/`, templates, README)
+- [x] Build pipeline — update `npm run build` to copy `src/templates/` → `dist/templates/` after `tsc`
+- [x] `openwren init` command — creates workspace dir, writes template `openwren.json`, `.env`, and default `agents/atlas/soul.md`. Prints next steps. Skips if already initialized (--force to overwrite)
+- [x] `#!/usr/bin/env node` shebang — verify it survives `tsc` compilation in `dist/cli.js`
+- [x] Test local install — `npm run build && npm install -g .` → `OPENWREN_HOME=~/.openwren-test openwren init` → verify bot works → clean up
+- [x] Publish to npm — `npm login && npm publish`. Live at https://www.npmjs.com/package/openwren
 
 ### Phase 7 — Ollama Support
 

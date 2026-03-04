@@ -5,10 +5,10 @@ import * as dotenv from "dotenv";
 import JSON5 from "json5";
 
 // ---------------------------------------------------------------------------
-// Workspace path — hardcoded, not user-configurable
+// Workspace path — defaults to ~/.openwren, overridable via OPENWREN_HOME
 // ---------------------------------------------------------------------------
 
-const WORKSPACE_RAW = "~/.openwren";
+const WORKSPACE_RAW = process.env.OPENWREN_HOME || "~/.openwren";
 
 function resolveHome(raw: string): string {
   if (raw.startsWith("~/")) {

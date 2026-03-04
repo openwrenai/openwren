@@ -69,7 +69,7 @@ shell    read/write  memory
 
 All defaults live in code (`defaultConfig` in `config.ts`). User overrides go in `~/.openwren/openwren.json` — a JSON5 file with flat dot-notation keys. Secrets reference env vars via `${env:VAR}` syntax, resolved from `~/.openwren/.env`.
 
-Nothing reads `process.env` directly (except `PORT` for the gateway). Everything flows: `openwren.json` → `${env:VAR}` → `.env`.
+Nothing reads `process.env` directly (except `PORT` for the gateway and `OPENWREN_HOME` for workspace path override). Everything flows: `openwren.json` → `${env:VAR}` → `.env`.
 
 **Example openwren.json:**
 ```json5
@@ -127,7 +127,7 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 └── exec-approvals.json                   # Shell commands approved once per agent
 ```
 
-The workspace path (`~/.openwren`) is hardcoded in code. Not user-configurable.
+The workspace path defaults to `~/.openwren`. Overridable via `OPENWREN_HOME` env var (for testing or running multiple instances).
 
 **Sessions** are ephemeral — they compact and archive over time. **Memory files** are permanent — they survive session resets, restarts, and compaction.
 
@@ -213,10 +213,11 @@ Users are defined in config with channel-agnostic IDs. Authorization works by sc
 
 ## CLI
 
-Standalone process manager and interactive client. Entry point: `src/cli.ts` (compiled: `dist/cli.js`). Dev: `npm run cli -- <command>`. After global install (Phase 6): `openwren <command>`.
+Standalone process manager and interactive client. Entry point: `src/cli.ts` (compiled: `dist/cli.js`). Dev: `npm run cli -- <command>`. After global install: `openwren <command>`.
 
 | Command | What it does |
 |---|---|
+| `init` | Create workspace (`~/.openwren/`) with template config, `.env`, and default Atlas soul file. Skips if already initialized (`--force` to overwrite) |
 | `start` | Spawn bot as detached daemon, write PID to `~/.openwren/openwren.pid`, redirect logs to `~/.openwren/openwren.log` |
 | `stop` | Read PID file, send SIGTERM, wait up to 5s, force-kill if needed |
 | `restart` | Stop + start |
@@ -224,9 +225,10 @@ Standalone process manager and interactive client. Entry point: `src/cli.ts` (co
 | `logs` | Tail `~/.openwren/openwren.log` with `tail -f -n 50` |
 | `chat [agent]` | Interactive terminal REPL via WS. Supports tool confirmation (yes/no/always) |
 
-Two run modes:
-- **`npm run dev`** — foreground, logs to terminal, Ctrl+C to stop
-- **`npm run cli -- start`** — background daemon, logs to file, managed via CLI commands
+Three run modes:
+- **`npm install -g openwren`** → `openwren init` → `openwren start` — global install from npm, for end users
+- **`npm run dev`** — foreground, logs to terminal, Ctrl+C to stop (for development)
+- **`npm run cli -- start`** — background daemon, logs to file, managed via CLI commands (for development)
 
 ---
 
@@ -253,6 +255,8 @@ Two run modes:
 - **CLI** — `src/cli.ts` is completely standalone. It imports zero modules from the main app (no config, no events, nothing). This is deliberate — it must start fast and work even if config validation fails. It reads `~/.openwren/.env` directly (line-by-line parse) for the WS token. Dev usage: `npm run cli -- <command>`
 - **Timestamped logging** — `console.log` and `console.error` are overridden once in `index.ts` to prepend `[YYYY-MM-DD HH:MM:SS]`. Every module gets timestamps for free — no per-file changes needed
 - **Graceful shutdown** — `index.ts` registers SIGTERM/SIGINT handlers that call `stopChannels()`, close Fastify, and clean up the PID file. Triggered by `openwren stop` or Ctrl+C in foreground mode
+- **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsc && rm -rf dist/templates && cp -r src/templates dist/templates` (TypeScript doesn't copy non-TS files). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source
+- **`OPENWREN_HOME`** — env var to override workspace path. Used in both `config.ts` (main app) and `cli.ts` (standalone CLI). Defaults to `~/.openwren`. Useful for testing: `OPENWREN_HOME=~/.openwren-test openwren init`
 
 ---
 

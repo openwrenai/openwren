@@ -1,22 +1,44 @@
 {
   "name": "openwren",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2026.3.4",
+  "description": "Self-hosted personal AI assistant bot with multi-channel support (Telegram, Discord, WebSocket)",
+  "main": "dist/index.js",
   "bin": {
     "openwren": "dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && rm -rf dist/templates && cp -r src/templates dist/templates",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "cli": "ts-node src/cli.ts",
     "scratch": "ts-node src/scratch.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "ai",
+    "agent",
+    "bot",
+    "telegram",
+    "discord",
+    "claude",
+    "ollama",
+    "self-hosted",
+    "personal-assistant"
+  ],
+  "author": "Nermin Bajagilovic <nermion@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openwrenai/openwren.git"
+  },
+  "homepage": "https://github.com/openwrenai/openwren",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "devDependencies": {
     "@types/node": "^25.3.0",
     "ts-node": "^10.9.2",

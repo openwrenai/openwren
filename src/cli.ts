@@ -27,7 +27,9 @@ import { WebSocket } from "ws";
 // Constants
 // ---------------------------------------------------------------------------
 
-const WORKSPACE = path.join(os.homedir(), ".openwren");
+const WORKSPACE = process.env.OPENWREN_HOME
+  ? path.resolve(process.env.OPENWREN_HOME.replace(/^~\//, os.homedir() + "/"))
+  : path.join(os.homedir(), ".openwren");
 const PID_FILE = path.join(WORKSPACE, "openwren.pid");
 const LOG_FILE = path.join(WORKSPACE, "openwren.log");
 const ENV_FILE = path.join(WORKSPACE, ".env");
@@ -420,6 +422,107 @@ async function cmdChat(agentId?: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Command: init — create workspace directory and template files
+// ---------------------------------------------------------------------------
+
+/**
+ * Default soul.md content for the Atlas agent.
+ * Duplicated here (not imported from workspace.ts) because the CLI is standalone.
+ */
+const DEFAULT_SOUL = `# Who You Are
+
+You are Atlas, a personal AI assistant running locally on your owner's machine.
+You are capable, direct, and thoughtful. You get things done without unnecessary filler.
+
+## Memory
+
+You have a persistent memory system that survives session resets and compaction.
+
+- Use \`save_memory\` to store important facts, preferences, and context worth keeping across sessions.
+- Use \`memory_search\` at the start of conversations that reference past context ("my project", "that thing we discussed", etc.).
+- Memory files persist forever — session history does not.
+- Prefix your memory keys with your name to avoid collisions with other agents (e.g. \`atlas-user-prefs\`, \`atlas-projects\`).
+
+## Tools
+
+You have access to tools for reading/writing files, running whitelisted shell commands, and searching memory.
+Use them proactively when they help you give a better answer. Don't ask for permission to use a tool — just use it.
+
+## Style
+
+- Be concise. Skip preamble and filler phrases.
+- If you don't know something, say so directly.
+- If a task is ambiguous, ask one clarifying question — not five.
+- Format responses with markdown when it aids readability (code blocks, lists, headers).
+`;
+
+function cmdInit(args: string[]): void {
+  const force = args.includes("--force");
+
+  // Check if workspace already exists
+  const configPath = path.join(WORKSPACE, "openwren.json");
+  if (fs.existsSync(configPath) && !force) {
+    console.log(`Open Wren is already initialized at ${WORKSPACE}`);
+    console.log("Use --force to overwrite existing files.");
+    return;
+  }
+
+  // Resolve templates directory relative to this script.
+  // In compiled mode: dist/cli.js → dist/templates/
+  // In dev mode: src/cli.ts → src/templates/
+  const templatesDir = path.join(__dirname, "templates");
+
+  if (!fs.existsSync(templatesDir)) {
+    console.error(`Templates not found at ${templatesDir}`);
+    console.error("This is a build error — templates should be in dist/templates/");
+    process.exit(1);
+  }
+
+  // 1. Create directory structure
+  const dirs = [
+    WORKSPACE,
+    path.join(WORKSPACE, "sessions"),
+    path.join(WORKSPACE, "memory"),
+    path.join(WORKSPACE, "agents"),
+    path.join(WORKSPACE, "agents", "atlas"),
+  ];
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+  console.log(`✓ Created ${WORKSPACE}/`);
+
+  // 2. Write template config
+  const configTemplate = fs.readFileSync(path.join(templatesDir, "openwren.json"), "utf-8");
+  fs.writeFileSync(configPath, configTemplate, "utf-8");
+  console.log("✓ Created openwren.json");
+
+  // 3. Write template .env
+  const envPath = path.join(WORKSPACE, ".env");
+  const envTemplate = fs.readFileSync(path.join(templatesDir, "env.template"), "utf-8");
+  fs.writeFileSync(envPath, envTemplate, "utf-8");
+  console.log("✓ Created .env");
+
+  // 4. Write default Atlas soul file
+  const soulPath = path.join(WORKSPACE, "agents", "atlas", "soul.md");
+  if (!fs.existsSync(soulPath) || force) {
+    fs.writeFileSync(soulPath, DEFAULT_SOUL, "utf-8");
+    console.log("✓ Created agents/atlas/soul.md");
+  }
+
+  // 5. Print next steps
+  console.log(`
+Setup complete! Next steps:
+
+  1. Add your API keys in ${WORKSPACE}/.env
+  2. Uncomment and edit settings in ${WORKSPACE}/openwren.json
+  3. Run: openwren start
+`);
+}
+
+// ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
 
@@ -430,6 +533,7 @@ Open Wren CLI
 Usage: openwren <command> [options]
 
 Commands:
+  init            Initialize workspace (~/.openwren) with template files
   start           Start the bot as a background daemon
   stop            Stop the running daemon
   restart         Stop and restart the daemon
@@ -447,6 +551,7 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
   switch (command) {
+    case "init":    cmdInit(args);          break;
     case "start":   await cmdStart();       break;
     case "stop":    await cmdStop();        break;
     case "restart": await cmdRestart();     break;
