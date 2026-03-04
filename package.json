@@ -1,6 +1,6 @@
 {
   "name": "openwren",
-  "version": "2026.3.4",
+  "version": "2026.3.4-1",
   "description": "Self-hosted personal AI assistant bot with multi-channel support (Telegram, Discord, WebSocket)",
   "main": "dist/index.js",
   "bin": {

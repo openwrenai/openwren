@@ -43,48 +43,19 @@ Removed the router abstraction entirely. Every bot (Telegram, Discord) is hardwi
 
 Added WebSocket support to the existing Fastify server. Internal event bus for cross-channel observability. WS clients can send messages to agents and receive all bus events. Foundation for CLI (Phase 5) and Web UI (Phase 10).
 
-- [x] `npm install @fastify/websocket` — WebSocket plugin for Fastify
-- [x] `src/events.ts` — typed event bus (`EventEmitter` singleton). Event protocol: `message_in`, `message_out`, `agent_typing`, `session_compacted`, `agent_error`, `status`, `confirm_request`
-- [x] `src/gateway/server.ts` — registered `@fastify/websocket` plugin, exported Fastify instance for WS channel to attach routes
-- [x] `src/channels/websocket.ts` — `WebSocketChannel` implements `Channel`. Token auth via `?token=` query param, rate limiting, confirmation flow via nonces, broadcasts bus events to all connected clients
-- [x] `src/channels/index.ts` — wired `createWebSocketChannel()` into channel array
-- [x] `src/channels/telegram.ts` + `discord.ts` — added bus event emissions (message_in, agent_typing, message_out, session_compacted, agent_error) as side effects
-- [x] `src/config.ts` — added `gateway.wsToken` to Config interface and defaults
-- [x] Templates — added `gateway.wsToken` to openwren.json template, `WS_TOKEN` to env.template
-- [x] `CLAUDE.md` — updated architecture diagram, project structure, tech stack, added event bus and WS channel docs
-- [x] Compile clean
-
 ### Phase 5 — CLI Commands
 
 Standalone CLI for process management and interactive chat. No imports from the main app — starts fast, works even if config is broken. Dev usage: `npm run cli -- <command>`. After Phase 6 (packaging): `openwren <command>`.
-
-- [x] `src/cli.ts` — CLI entry point with command routing, wired into `package.json` `bin` field (`dist/cli.js`) and `cli` dev script
-- [x] `openwren start` — spawns bot as detached background daemon, writes PID to `~/.openwren/openwren.pid`, redirects stdout/stderr to `~/.openwren/openwren.log`
-- [x] `openwren stop` — reads PID file, sends SIGTERM, waits up to 5s, force-kills if needed, cleans PID file
-- [x] `openwren restart` — stop + start with port release pause
-- [x] `openwren status` — connects to WS gateway, prints agents, channels, uptime. Falls back to PID-only status if WS not configured
-- [x] `openwren logs` — tails `~/.openwren/openwren.log` with `tail -f -n 50`
-- [x] `openwren chat [agent]` — interactive terminal REPL via WS with confirmation flow (yes/no/always), error handling, compaction notices
-- [x] `src/index.ts` — SIGTERM/SIGINT graceful shutdown handler (stops channels, closes Fastify, cleans PID file)
-- [x] `src/channels/index.ts` — added `stopChannels()` for graceful shutdown
-- [x] Timestamped logging — `[YYYY-MM-DD HH:MM:SS]` prepended to all console.log/error output via override in `index.ts`
-- [x] Compile clean, all commands tested
-
-## Left to do Phases
 
 ### Phase 6 — Installer / npm Packaging
 
 Package Open Wren for global install via `npm install -g openwren`. Versioning: CalVer `YYYY.M.D` (date-based).
 
-Claude go step by step here and after each task ask user to check everything looks good so far. do not do all items at once, very important!
+### Phase 6.1 — README v1
 
-- [x] `OPENWREN_HOME` env var — override workspace path (defaults to `~/.openwren`). Updated `config.ts` + `cli.ts`
-- [x] `package.json` metadata — description, repository, keywords, author, license, `files` field (ship only `dist/`, templates, README)
-- [x] Build pipeline — update `npm run build` to copy `src/templates/` → `dist/templates/` after `tsc`
-- [x] `openwren init` command — creates workspace dir, writes template `openwren.json`, `.env`, and default `agents/atlas/soul.md`. Prints next steps. Skips if already initialized (--force to overwrite)
-- [x] `#!/usr/bin/env node` shebang — verify it survives `tsc` compilation in `dist/cli.js`
-- [x] Test local install — `npm run build && npm install -g .` → `OPENWREN_HOME=~/.openwren-test openwren init` → verify bot works → clean up
-- [x] Publish to npm — `npm login && npm publish`. Live at https://www.npmjs.com/package/openwren
+First proper README for the npm package and GitHub repo. Covers install, setup, CLI commands, configuration, adding agents, Discord setup, and license.
+
+## Left to do Phases
 
 ### Phase 7 — Ollama Support
 
