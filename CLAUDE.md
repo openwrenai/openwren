@@ -237,7 +237,7 @@ Three run modes:
 - Prefer **explicit over clever** — this codebase should be readable at a glance
 - Keep the agent loop in one file (`loop.ts`) so the control flow is obvious
 - Tool definitions and their executor functions live together in their respective files
-- **Provider chain** — `createProviderChain(agentId)` resolves the model chain (primary + fallbacks) and returns a `ProviderChain` that implements `LLMProvider`. The agent loop doesn't know it's talking to a chain. Inheritance: agent without `model` inherits `defaultModel` + `defaultFallback`. Agent with `model` but no `fallback` uses only that model. Agent with both uses its own chain
+- **Provider chain** — `createProviderChain(agentId)` resolves the model chain (primary + fallbacks) and returns a `ProviderChain` that implements `LLMProvider`. The agent loop doesn't know it's talking to a chain. Inheritance: agent without `model` inherits `defaultModel` + `defaultFallback`. Agent with `model` but no `fallback` inherits `defaultFallback` as safety net. Agent with both `model` and `fallback` uses its own chain exclusively
 - The provider abstraction is the most important seam — keep it clean
 - **Config system** — all defaults in `defaultConfig` in `config.ts`. User overrides via `~/.openwren/openwren.json` (JSON5, dot-notation). Secrets via `${env:VAR}` referencing `~/.openwren/.env`. Nothing reads `process.env` directly
 - **Confirmation flow** — stateful, lives in the channel layer (`telegram.ts`). `pendingConfirmations: Map<chatId, PendingCommand>`. The agent loop is not aware of this

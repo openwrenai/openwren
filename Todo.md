@@ -55,8 +55,6 @@ Package Open Wren for global install via `npm install -g openwren`. Versioning: 
 
 First proper README for the npm package and GitHub repo. Covers install, setup, CLI commands, configuration, adding agents, Discord setup, and license.
 
-## Left to do Phases
-
 ### Phase 6.2 — Switch to ES Modules (via tsup bundler)
 
 Migrate from CommonJS to ESM using `tsup` as the bundler. `tsc` becomes type-check only (`noEmit: true`). The bundler handles all module resolution — no `.js` extensions needed anywhere in source.
@@ -75,8 +73,8 @@ Migrate from CommonJS to ESM using `tsup` as the bundler. `tsc` becomes type-che
 - [x] `npm run cli -- init --force` creates workspace files (use `OPENWREN_HOME=~/.openwren-test`)
 - [x] `npm run cli -- start` spawns daemon
 - [x] `npm run cli -- status` connects and shows agents/uptime
-- [ ] `npm run cli -- logs` tails the log file
-- [ ] `npm run cli -- chat` works via WebSocket
+- [x] `npm run cli -- logs` tails the log file
+- [x] `npm run cli -- chat` works via WebSocket
 - [x] `npm run cli -- stop` stops the daemon cleanly
 
 **Verify (production via globally installed `openwren`):**
@@ -84,20 +82,26 @@ Migrate from CommonJS to ESM using `tsup` as the bundler. `tsc` becomes type-che
 - [x] `OPENWREN_HOME=~/.openwren-test openwren init --force` creates workspace files
 - [x] `OPENWREN_HOME=~/.openwren-test openwren start` spawns daemon
 - [x] `OPENWREN_HOME=~/.openwren-test openwren status` shows agents/uptime
-- [ ] `OPENWREN_HOME=~/.openwren-test openwren logs` tails the log file
-- [ ] `OPENWREN_HOME=~/.openwren-test openwren chat` works via WebSocket
+- [x] `OPENWREN_HOME=~/.openwren-test openwren logs` tails the log file
+- [x] `OPENWREN_HOME=~/.openwren-test openwren chat` works via WebSocket
 - [x] `OPENWREN_HOME=~/.openwren-test openwren stop` stops the daemon cleanly
 - [x] Clean up: `rm -rf ~/.openwren-test`
+
+## Left to do Phases
 
 ### Phase 7 — Ollama Support
 
 Add local LLM support via Ollama. Same `LLMProvider` interface — the agent loop doesn't know or care.
 
-- [ ] `src/providers/ollama.ts` — implement `LLMProvider` against Ollama REST API (`http://localhost:11434/api/chat`)
-- [ ] Provider factory in `src/providers/index.ts` — resolve `ollama/` prefix in model strings
-- [ ] Test tool_use compatibility — not all Ollama models support native function calling
-- [ ] Fallback: if model doesn't support native tool_use, implement XML-based tool parsing in system prompt instead
-- [ ] Recommended models to test first: `qwen3:8b` and `llama3.2` — best function calling support among open-source models
+- [x] `src/config.ts` — add `providers.ollama.baseUrl` (default: `http://localhost:11434`)
+- [x] `src/providers/ollama.ts` — implement `LLMProvider` against Ollama REST API. Translates internal Anthropic-style message format to OpenAI-compatible format Ollama expects (tool definitions, tool calls, tool results, system prompt)
+- [x] `src/providers/index.ts` — wire in OllamaProvider, replace existing stub
+- [x] `src/channels/websocket.ts` — log incoming user messages
+- [x] `src/index.ts` — log per-agent model overrides at boot
+- [x] Test with `ollama/gpt-oss:20b` — basic chat confirmed working via Telegram
+- [ ] Test tool calling with Ollama model
+- [ ] Recommended models for function calling: `qwen3:8b`, `llama3.2`
+
 
 ### Phase 8 — Skills System
 

@@ -178,6 +178,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     }
 
     const text = msg.text.trim();
+    console.log(`[websocket] ${agentConfig.name} ← ${client.userId}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
 
     // Bus: notify observers that a message arrived
     bus.emit("message_in", {

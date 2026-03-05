@@ -18,6 +18,22 @@ import { getToolDefinitions, executeTool, ConfirmFn } from "../tools";
 
 const MAX_ITERATIONS = config.agent?.maxIterations ?? 10;
 
+/**
+ * Cleans up model responses before saving and returning to the user.
+ * 1. Strips <think>...</think> blocks (some models like qwen3.5 include reasoning)
+ * 2. Strips injected timestamp prefixes that models sometimes echo back
+ */
+function cleanModelResponse(text: string): string {
+  // Strip <think>...</think> blocks that some models include in their output
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  // Strip timestamp prefix the model may echo back: [Mar 5, 10:31]
+  cleaned = cleaned.trimStart().replace(
+    /^\[(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{2}:\d{2}\]\s*/,
+    ""
+  );
+  return cleaned;
+}
+
 export interface LoopResult {
   text: string;
   compacted: boolean;
@@ -97,15 +113,17 @@ export async function runAgentLoop(
 
       // Plain text response — we're done
       if (response.type === "text") {
+        console.log(`[loop] Raw model response: ${(response.text ?? "").slice(0, 300)}`);
+        const text = cleanModelResponse(response.text ?? "");
         const assistantMsg: TimestampedMessage = {
           timestamp: Date.now(),
           role: "assistant",
-          content: response.text ?? "",
+          content: text,
         };
         messages.push(assistantMsg);
         appendMessage(userId, agentId, assistantMsg);
         return {
-          text: response.text ?? "",
+          text,
           compacted: compactionResult.compacted,
           nearThreshold: compactionResult.nearThreshold,
         };

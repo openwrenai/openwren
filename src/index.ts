@@ -35,6 +35,11 @@ async function main() {
   console.log(`[boot] Default model: ${config.defaultModel}`);
   console.log(`[boot] Default agent: ${config.defaultAgent} (${config.agents[config.defaultAgent].name})`);
   console.log(`[boot] Workspace: ${config.workspaceDir}`);
+  for (const [id, agent] of Object.entries(config.agents)) {
+    if (agent.model) {
+      console.log(`[boot] Agent override: ${id} (${agent.name}) → ${agent.model}`);
+    }
+  }
 
   // Ensure workspace directory structure exists
   initWorkspace();

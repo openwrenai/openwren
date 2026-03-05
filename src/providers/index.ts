@@ -1,5 +1,6 @@
 import { config } from "../config";
 import { AnthropicProvider } from "./anthropic";
+import { OllamaProvider } from "./ollama";
 
 // ---------------------------------------------------------------------------
 // Message types — the common format used between the agent loop and providers
@@ -135,10 +136,13 @@ export function parseFallbackChain(chain: string | undefined): ProviderSpec[] {
 export function resolveModelChain(agentId: string): ProviderSpec[] {
   const agentConfig = config.agents[agentId];
 
-  // Agent has its own model — use agent-specific chain
+  // Agent has its own model — use agent-specific chain.
+  // If no agent-level fallback is set, inherit defaultFallback as the safety net.
   if (agentConfig?.model) {
     const primary = parseProviderSpec(agentConfig.model);
-    const fallbacks = parseFallbackChain(agentConfig.fallback);
+    const fallbacks = agentConfig.fallback
+      ? parseFallbackChain(agentConfig.fallback)
+      : parseFallbackChain(config.defaultFallback);
     return [primary, ...fallbacks];
   }
 
@@ -161,7 +165,7 @@ function createProviderFromSpec(spec: ProviderSpec): LLMProvider {
     case "anthropic":
       return new AnthropicProvider(spec.model);
     case "ollama":
-      throw new Error("Ollama provider not yet implemented (Phase 4)");
+      return new OllamaProvider(spec.model);
     default:
       throw new Error(`Unknown provider: "${spec.provider}"`);
   }
@@ -217,6 +221,7 @@ class ProviderChain implements LLMProvider {
           continue;
         }
 
+        console.log(`[provider] Response from ${spec.provider}/${spec.model}`);
         return response;
       } catch (err) {
         // Unexpected throw (e.g. provider constructor failed) — try next fallback
