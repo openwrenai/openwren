@@ -53,6 +53,14 @@
   // "session.idleResetMinutes": 0,
   // "session.dailyResetTime": "",
 
+  // --- Skills ---
+  // Only allow specific bundled skills (omit to allow all):
+  // "skills.allowBundled": ["memory-management", "file-operations"],
+  // Disable a specific skill (works for bundled, global, or per-agent):
+  // "skills.entries.web-fetch.enabled": false,
+  // Load skills from additional directories:
+  // "skills.load.extraDirs": ["~/my-shared-skills"],
+
   // --- Agent Loop ---
   // "agent.maxIterations": 10,
   // "agent.compaction.enabled": true,

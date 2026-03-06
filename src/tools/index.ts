@@ -2,6 +2,7 @@ import type { ToolDefinition } from "../providers";
 import { shellToolDefinition, executeShell, DESTRUCTIVE_COMMANDS } from "./shell";
 import { readFileToolDefinition, writeFileToolDefinition, readFile, writeFile } from "./filesystem";
 import { saveMemoryToolDefinition, searchMemoryToolDefinition, saveMemory, searchMemory } from "./memory";
+import { loadSkillToolDefinition, loadSkill } from "./skills";
 import { isApproved, permanentlyApprove } from "./approvals";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     writeFileToolDefinition,
     saveMemoryToolDefinition,
     searchMemoryToolDefinition,
+    loadSkillToolDefinition,
   ];
 }
 
@@ -89,6 +91,9 @@ export async function executeTool(
 
       case "memory_search":
         return await searchMemory(input.query as string);
+
+      case "load_skill":
+        return loadSkill(input.name as string, agentId);
 
       default:
         return `[tool error] Unknown tool: "${name}"`;

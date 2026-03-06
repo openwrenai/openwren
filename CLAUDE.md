@@ -117,13 +117,17 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 │   └── atlas-projects.md
 ├── agents/
 │   ├── atlas/
-│   │   └── soul.md                       # Atlas personality and instructions
+│   │   ├── soul.md                       # Atlas personality and instructions
+│   │   └── skills/                       # Per-agent skills (highest precedence)
 │   ├── einstein/
 │   │   └── soul.md
 │   ├── wizard/
 │   │   └── soul.md
 │   └── personal_trainer/
 │       └── soul.md
+├── skills/                               # Global skills (visible to all agents)
+│   └── custom-skill/
+│       └── SKILL.md
 └── exec-approvals.json                   # Shell commands approved once per agent
 ```
 
@@ -153,15 +157,24 @@ src/
 ├── agent/
 │   ├── loop.ts            # Core ReAct loop (think → tool → think → respond)
 │   ├── history.ts         # JSONL session persistence, compaction, archival, timestamps, locking
-│   └── prompt.ts          # Loads soul.md for the resolved agent into system prompt
+│   ├── prompt.ts          # Loads soul.md + skills into system prompt
+│   └── skills.ts          # Skill catalog builder: scan dirs, parse frontmatter, gate checks
 ├── providers/
 │   ├── index.ts           # Provider interface, ProviderChain (cascading fallbacks), model chain resolution
-│   └── anthropic.ts       # Anthropic Claude implementation
+│   ├── anthropic.ts       # Anthropic Claude implementation
+│   └── ollama.ts          # Ollama local LLM implementation
 ├── tools/
 │   ├── index.ts           # Tool registry, definitions, executor
 │   ├── shell.ts           # Whitelisted shell command runner
 │   ├── filesystem.ts      # Sandboxed file read/write
-│   └── memory.ts          # save_memory and memory_search tools
+│   ├── memory.ts          # save_memory and memory_search tools
+│   └── skills.ts          # load_skill tool (on-demand skill activation)
+├── skills/                # Bundled skills shipped with the package
+│   ├── memory-management/ # autoload — teaches agents memory tools
+│   ├── file-operations/   # autoload — teaches agents file sandbox rules
+│   ├── brave-search/      # gated on BRAVE_API_KEY
+│   ├── web-fetch/         # no gate
+│   └── agent-browser/     # gated on agent-browser binary
 └── scratch.ts             # Terminal REPL for dev testing
 ```
 
@@ -243,6 +256,7 @@ Three run modes:
 - **Confirmation flow** — stateful, lives in the channel layer (`telegram.ts`). `pendingConfirmations: Map<chatId, PendingCommand>`. The agent loop is not aware of this
 - **Agent name in replies** — prepend `[AgentName]` to every reply in `telegram.ts`, not in the loop. The loop is channel-agnostic
 - **Soul files** — load from `~/.openwren/agents/{agent-id}/soul.md` on every API call. Never cache — user edits take effect immediately
+- **Skills system** — two-stage loading. Stage 1: `buildSkillCatalog()` scans bundled → extra dirs → global → per-agent skill directories, parses SKILL.md frontmatter (hand-rolled, no YAML dep), runs gate checks (`requires.env`, `requires.bins`, `requires.os`), returns catalog entries (name + description) and autoloaded skill bodies. Stage 2: agent calls `load_skill` tool to get the full body on demand. Skills with `autoload: true` skip the catalog and inject directly into the system prompt. Precedence: per-agent > global > extra dirs > bundled. Bundled skills live in `src/skills/`, copied to `dist/skills/` by the build script. Adding a new skill requires zero code changes — just create `~/.openwren/skills/{name}/SKILL.md`
 - **Adding a new agent** — zero code changes. Create `~/.openwren/agents/{id}/soul.md`, add dot-notation keys in `openwren.json`. If adding an agent ever requires TypeScript changes, the abstraction is wrong
 - **Channel decoupling** — agents have zero channel fields. Bindings (`config.bindings`) map channels to agents with credentials. Channel-first layout: `bindings.telegram.atlas` for O(1) lookup when a message arrives. Three concepts: agents (personality), channels (transport settings), bindings (glue)
 - **Channel interface** — each channel implements `Channel` from `channels/types.ts`. Barrel file `channels/index.ts` exports `startChannels()`. `index.ts` has no platform-specific knowledge. Adding a new channel = create adapter file + one import in the barrel
@@ -255,7 +269,7 @@ Three run modes:
 - **CLI** — `src/cli.ts` is completely standalone. It imports zero modules from the main app (no config, no events, nothing). This is deliberate — it must start fast and work even if config validation fails. It reads `~/.openwren/.env` directly (line-by-line parse) for the WS token. Dev usage: `npm run cli -- <command>`
 - **Timestamped logging** — `console.log` and `console.error` are overridden once in `index.ts` to prepend `[YYYY-MM-DD HH:MM:SS]`. Every module gets timestamps for free — no per-file changes needed
 - **Graceful shutdown** — `index.ts` registers SIGTERM/SIGINT handlers that call `stopChannels()`, close Fastify, and clean up the PID file. Triggered by `openwren stop` or Ctrl+C in foreground mode
-- **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). Same-day hotfixes use a suffix: `YYYY.M.D-1`, `YYYY.M.D-2`, etc. `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsc && rm -rf dist/templates && cp -r src/templates dist/templates` (TypeScript doesn't copy non-TS files). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source
+- **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). Same-day hotfixes use a suffix: `YYYY.M.D-1`, `YYYY.M.D-2`, etc. `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills` (bundler doesn't copy non-TS assets). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source
 - **`OPENWREN_HOME`** — env var to override workspace path. Used in both `config.ts` (main app) and `cli.ts` (standalone CLI). Defaults to `~/.openwren`. Useful for testing: `OPENWREN_HOME=~/.openwren-test openwren init`
 
 ---

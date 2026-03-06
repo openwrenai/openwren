@@ -66,6 +66,13 @@ export interface Config {
   gateway: {
     wsToken: string; // Bearer token for WS auth. Empty = WS disabled.
   };
+  skills: {
+    allowBundled?: string[];  // whitelist of bundled skill names. undefined = all allowed.
+    entries: Record<string, { enabled?: boolean }>;
+    load: {
+      extraDirs: string[];
+    };
+  };
   agent: {
     maxIterations: number;
     compaction: {
@@ -130,6 +137,12 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
   session: {
     idleResetMinutes: 0,
     dailyResetTime: "",
+  },
+  skills: {
+    entries: {},
+    load: {
+      extraDirs: [],
+    },
   },
   agent: {
     maxIterations: 10,
@@ -201,6 +214,11 @@ function resolveEnvRefs(obj: any): any {
 // ---------------------------------------------------------------------------
 
 const TEMPLATES_DIR = path.join(import.meta.dirname, "templates");
+
+// Bundled skills shipped with the package.
+// Dev (tsx): import.meta.dirname = src/ → src/skills/
+// Prod (tsup): import.meta.dirname = dist/ → dist/skills/
+export const BUNDLED_SKILLS_DIR = path.join(import.meta.dirname, "skills");
 
 function loadTemplate(filename: string): string {
   return fs.readFileSync(path.join(TEMPLATES_DIR, filename), "utf-8");

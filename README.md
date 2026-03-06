@@ -95,7 +95,9 @@ All config lives in `~/.openwren/`:
 ├── .env              # Secrets — never share this
 ├── agents/
 │   └── atlas/
-│       └── soul.md   # Atlas personality and instructions
+│       ├── soul.md   # Atlas personality and instructions
+│       └── skills/   # Per-agent skills (Atlas only)
+├── skills/           # Global skills (all agents)
 ├── memory/           # Persistent memory files
 └── sessions/         # Conversation history (per user, per agent)
 ```
@@ -148,6 +150,63 @@ That's it. Wizard now has his own Telegram bot, isolated session history, and sh
 
 ---
 
+## Skills
+
+Skills are markdown files that teach agents when and how to use capabilities. They use a two-stage loading model — the agent sees a lightweight catalog at session start and loads full instructions on demand.
+
+**Bundled skills** ship with Open Wren:
+
+| Skill | Type | Gate |
+|---|---|---|
+| `memory-management` | autoloaded | none |
+| `file-operations` | autoloaded | none |
+| `brave-search` | on-demand | `BRAVE_API_KEY` env var |
+| `web-fetch` | on-demand | none |
+| `agent-browser` | on-demand | `agent-browser` binary |
+
+**Autoloaded** skills inject into every prompt automatically. **On-demand** skills appear in a catalog — the agent calls `load_skill` to activate them when relevant.
+
+### Custom skills
+
+Create a `SKILL.md` in any of these locations:
+
+```
+~/.openwren/skills/my-skill/SKILL.md              # global — all agents see it
+~/.openwren/agents/atlas/skills/my-skill/SKILL.md  # per-agent — only Atlas
+```
+
+**SKILL.md format:**
+
+```markdown
+---
+name: my-skill
+description: What this skill does and when to use it.
+---
+
+Instructions the agent receives when it activates this skill.
+```
+
+Optional frontmatter fields: `autoload: true` (inject into every prompt), `requires.env: [API_KEY]`, `requires.bins: [ffmpeg]`, `requires.os: darwin`, `enabled: false`.
+
+### Skills config
+
+```json5
+{
+  // Only allow specific bundled skills (omit to allow all):
+  "skills.allowBundled": ["memory-management", "file-operations"],
+
+  // Disable a specific skill:
+  "skills.entries.web-fetch.enabled": false,
+
+  // Load skills from additional directories:
+  "skills.load.extraDirs": ["~/my-shared-skills"],
+}
+```
+
+Per-agent skills override global skills with the same name. Global skills override bundled skills.
+
+---
+
 ## Discord Setup
 
 Before running a Discord bot, enable **Message Content Intent** in the Discord Developer Portal:
@@ -173,4 +232,4 @@ Discord bots respond to DMs only.
 
 ## License
 
-MIT © Nermin Bajagilovic
+MIT © Nermin Bajagilovic / Reimagined Works AB

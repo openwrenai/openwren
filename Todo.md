@@ -87,8 +87,6 @@ Migrate from CommonJS to ESM using `tsup` as the bundler. `tsc` becomes type-che
 - [x] `OPENWREN_HOME=~/.openwren-test openwren stop` stops the daemon cleanly
 - [x] Clean up: `rm -rf ~/.openwren-test`
 
-## Left to do Phases
-
 ### Phase 7 — Ollama Support
 
 Add local LLM support via Ollama. Same `LLMProvider` interface — the agent loop doesn't know or care.
@@ -103,17 +101,31 @@ Add local LLM support via Ollama. Same `LLMProvider` interface — the agent loo
 - [ ] Recommended models for function calling: `qwen3:8b`, `llama3.2`
 
 
+## Left to do Phases
+
 ### Phase 8 — Skills System
 
 Add a skills loader that injects capability instructions into the system prompt at session start. See `Skills.md` for full architecture and SKILL.md format.
 
-- [ ] `src/agent/skills.ts` — loader: scans bundled → global → per-agent dirs, parses frontmatter, gate checks (env, bins, os), returns eligible skill bodies
-- [ ] `src/agent/prompt.ts` — append eligible skills after soul.md content
-- [ ] `src/config.ts` — add `skills` config section (`entries.<name>.enabled`, `load.extraDirs`)
-- [ ] `src/workspace.ts` — ensure `~/.openwren/skills/` directory exists at startup
-- [ ] Bundled skill: `src/skills/memory-management/SKILL.md`
-- [ ] Bundled skill: `src/skills/file-operations/SKILL.md`
+**Design decisions:**
+- Hand-rolled frontmatter parser (no YAML lib). Validate `requires.bins` names against `[a-zA-Z0-9_-]` before spawning `which`.
+- Env gate reads `~/.openwren/.env` once at boot (via dotenv, already loaded) + `process.env` fallback. Reload deferred to Phase 12 (`reloadEnv()`).
+- `autoload: true` frontmatter field — skill body injected directly into system prompt (no `load_skill` call needed). Used for memory-management and file-operations. Other skills use two-stage catalog + on-demand loading.
+- Trim `## Memory` and `## Tools` sections from default soul template in `workspace.ts` (existing user soul files untouched).
+
+**Tasks:**
+- [ ] `src/agent/skills.ts` — catalog builder: scan bundled → global → per-agent dirs, parse frontmatter (hand-rolled), gate checks (`requires.env`, `requires.bins`, `requires.os`), `enabled` check, config overrides. Returns catalog entries (name + description) and autoloaded skill bodies separately.
+- [ ] `src/tools/skills.ts` — `load_skill` tool: reads full SKILL.md body on demand, returns as tool result
+- [ ] `src/agent/prompt.ts` — append autoloaded skill bodies + skill catalog after soul.md
+- [ ] `src/tools/index.ts` — register `load_skill` tool
+- [ ] `src/config.ts` — add `skills` config section (`allowBundled`, `entries.<name>.enabled`, `load.extraDirs`)
+- [ ] `src/workspace.ts` — ensure `~/.openwren/skills/` directory exists; trim default soul template
+- [ ] Bundled skill: `src/skills/memory-management/SKILL.md` (`autoload: true`)
+- [ ] Bundled skill: `src/skills/file-operations/SKILL.md` (`autoload: true`)
+- [ ] Bundled skill stubs (Phase 9): `src/skills/brave-search/SKILL.md`, `src/skills/web-fetch/SKILL.md`, `src/skills/agent-browser/SKILL.md`
+- [ ] Update build script in `package.json` to copy `src/skills` to `dist/skills`
 - [ ] Update `CLAUDE.md` with skills architecture notes
+- [ ] Build and verify `npm run dev` works
 
 ### Phase 9 — Web Research (Search + Fetch + Browser)
 
@@ -195,3 +207,4 @@ WhatsApp support via `@whiskeysockets/baileys`. Unofficial, reverse-engineers Wh
 - [ ] Docker + `docker-compose` for VPS deployment
 - [ ] **File access sandbox review** — consider configurable `allowedPaths` so agent can access directories outside workspace without full shell access
 - [ ] **Shell command whitelist review** — make whitelist configurable via `openwren.json` so users can add/remove commands without touching code
+- [ ] **`reloadEnv()` / `reloadConfig()`** — hot-reload `.env` and `openwren.json` without restart. Needed when agents can self-modify (install skills, add API keys). Keep env data in a refreshable module-level map so reload is a one-function change

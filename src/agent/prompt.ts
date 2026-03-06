@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { config, AgentConfig } from "../config";
+import { buildSkillCatalog } from "./skills";
 
 /**
  * Loads the soul file for the given agent from disk on every call.
@@ -27,9 +28,35 @@ export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig): str
 
   const soul = fs.readFileSync(soulPath, "utf-8").trim();
 
-  // Append a small runtime context block so the agent always knows who it is
-  // and what session it's in — without hardcoding it into the soul file.
+  // Build skill catalog for this agent
+  const { catalog, autoloaded } = buildSkillCatalog(agentId);
+
+  // Autoloaded skill bodies — injected directly, no load_skill call needed.
+  // Each is wrapped with a clear header so the agent knows its name and origin.
+  const autoloadedSection = autoloaded.length > 0
+    ? "\n\n" + autoloaded
+        .map(s => `---\n\n## Skill: ${s.name} (autoloaded)\n\n${s.body}`)
+        .join("\n\n")
+    : "";
+
+  // Skill catalog — name + description only, agent calls load_skill for full instructions
+  const catalogSection = catalog.length > 0
+    ? [
+        "",
+        "",
+        "---",
+        "",
+        "## Available Skills",
+        "You have the following skills available. To activate a skill and get its full",
+        "instructions, use the `load_skill` tool with the skill name.",
+        "",
+        ...catalog.map(e => `- **${e.name}**: ${e.description}`),
+      ].join("\n")
+    : "";
+
+  // Runtime context — always appended last
   const runtimeContext = [
+    ``,
     ``,
     `---`,
     `## Runtime`,
@@ -37,5 +64,5 @@ export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig): str
     `Today is ${new Date().toDateString()}.`,
   ].join("\n");
 
-  return soul + runtimeContext;
+  return soul + autoloadedSection + catalogSection + runtimeContext;
 }
