@@ -1,8 +1,10 @@
 import type { ToolDefinition } from "../providers";
-import { shellToolDefinition, executeShell, DESTRUCTIVE_COMMANDS } from "./shell";
+import { shellToolDefinition, listShellCommandsToolDefinition, executeShell, listShellCommands, DESTRUCTIVE_COMMANDS } from "./shell";
 import { readFileToolDefinition, writeFileToolDefinition, readFile, writeFile } from "./filesystem";
 import { saveMemoryToolDefinition, searchMemoryToolDefinition, saveMemory, searchMemory } from "./memory";
 import { loadSkillToolDefinition, loadSkill } from "./skills";
+import { searchWebToolDefinition, searchWeb } from "./search";
+import { fetchUrlToolDefinition, fetchUrl } from "./fetch";
 import { isApproved, permanentlyApprove } from "./approvals";
 
 // ---------------------------------------------------------------------------
@@ -22,11 +24,14 @@ export type ConfirmFn = (command: string) => Promise<boolean | "always">;
 export function getToolDefinitions(): ToolDefinition[] {
   return [
     shellToolDefinition,
+    listShellCommandsToolDefinition,
     readFileToolDefinition,
     writeFileToolDefinition,
     saveMemoryToolDefinition,
     searchMemoryToolDefinition,
     loadSkillToolDefinition,
+    searchWebToolDefinition,
+    fetchUrlToolDefinition,
   ];
 }
 
@@ -69,6 +74,9 @@ export async function executeTool(
         return await executeShell(command);
       }
 
+      case "list_shell_commands":
+        return listShellCommands();
+
       case "read_file":
         return await readFile(input.path as string);
 
@@ -94,6 +102,12 @@ export async function executeTool(
 
       case "load_skill":
         return loadSkill(input.name as string, agentId);
+
+      case "search_web":
+        return await searchWeb(input.query as string, input.count as number | undefined);
+
+      case "fetch_url":
+        return await fetchUrl(input.url as string);
 
       default:
         return `[tool error] Unknown tool: "${name}"`;

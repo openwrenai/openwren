@@ -163,16 +163,22 @@ src/
 │   ├── index.ts           # Provider interface, ProviderChain (cascading fallbacks), model chain resolution
 │   ├── anthropic.ts       # Anthropic Claude implementation
 │   └── ollama.ts          # Ollama local LLM implementation
+├── search/
+│   ├── index.ts           # SearchProvider interface, factory, SearchResult type
+│   └── brave.ts           # Brave Search API implementation
 ├── tools/
 │   ├── index.ts           # Tool registry, definitions, executor
-│   ├── shell.ts           # Whitelisted shell command runner
+│   ├── shell.ts           # Whitelisted shell command runner + list_shell_commands tool
+│   ├── sanitize.ts        # Prompt injection detection (hard + soft) + untrusted content delimiters
 │   ├── filesystem.ts      # Sandboxed file read/write
 │   ├── memory.ts          # save_memory and memory_search tools
-│   └── skills.ts          # load_skill tool (on-demand skill activation)
+│   ├── skills.ts          # load_skill tool (on-demand skill activation)
+│   ├── search.ts          # search_web tool (provider-agnostic, injection scan on snippets)
+│   └── fetch.ts           # fetch_url tool (readability + linkedom, markdown fast-path, injection scan)
 ├── skills/                # Bundled skills shipped with the package
 │   ├── memory-management/ # autoload — teaches agents memory tools
 │   ├── file-operations/   # autoload — teaches agents file sandbox rules
-│   ├── brave-search/      # gated on BRAVE_API_KEY
+│   ├── web-search/        # gated on search.provider config key
 │   ├── web-fetch/         # no gate
 │   └── agent-browser/     # gated on agent-browser binary
 └── scratch.ts             # Terminal REPL for dev testing
@@ -256,7 +262,7 @@ Three run modes:
 - **Confirmation flow** — stateful, lives in the channel layer (`telegram.ts`). `pendingConfirmations: Map<chatId, PendingCommand>`. The agent loop is not aware of this
 - **Agent name in replies** — prepend `[AgentName]` to every reply in `telegram.ts`, not in the loop. The loop is channel-agnostic
 - **Soul files** — load from `~/.openwren/agents/{agent-id}/soul.md` on every API call. Never cache — user edits take effect immediately
-- **Skills system** — two-stage loading. Stage 1: `buildSkillCatalog()` scans bundled → extra dirs → global → per-agent skill directories, parses SKILL.md frontmatter (hand-rolled, no YAML dep), runs gate checks (`requires.env`, `requires.bins`, `requires.os`), returns catalog entries (name + description) and autoloaded skill bodies. Stage 2: agent calls `load_skill` tool to get the full body on demand. Skills with `autoload: true` skip the catalog and inject directly into the system prompt. Precedence: per-agent > global > extra dirs > bundled. Bundled skills live in `src/skills/`, copied to `dist/skills/` by the build script. Adding a new skill requires zero code changes — just create `~/.openwren/skills/{name}/SKILL.md`
+- **Skills system** — two-stage loading. Stage 1: `buildSkillCatalog()` scans bundled → extra dirs → global → per-agent skill directories, parses SKILL.md frontmatter (hand-rolled, no YAML dep), runs gate checks (`requires.env`, `requires.bins`, `requires.config`, `requires.os`), returns catalog entries (name + description) and autoloaded skill bodies. Stage 2: agent calls `load_skill` tool to get the full body on demand. Skills with `autoload: true` skip the catalog and inject directly into the system prompt. Precedence: per-agent > global > extra dirs > bundled. Bundled skills live in `src/skills/`, copied to `dist/skills/` by the build script. Adding a new skill requires zero code changes — just create `~/.openwren/skills/{name}/SKILL.md`
 - **Adding a new agent** — zero code changes. Create `~/.openwren/agents/{id}/soul.md`, add dot-notation keys in `openwren.json`. If adding an agent ever requires TypeScript changes, the abstraction is wrong
 - **Channel decoupling** — agents have zero channel fields. Bindings (`config.bindings`) map channels to agents with credentials. Channel-first layout: `bindings.telegram.atlas` for O(1) lookup when a message arrives. Three concepts: agents (personality), channels (transport settings), bindings (glue)
 - **Channel interface** — each channel implements `Channel` from `channels/types.ts`. Barrel file `channels/index.ts` exports `startChannels()`. `index.ts` has no platform-specific knowledge. Adding a new channel = create adapter file + one import in the barrel
@@ -270,6 +276,11 @@ Three run modes:
 - **Timestamped logging** — `console.log` and `console.error` are overridden once in `index.ts` to prepend `[YYYY-MM-DD HH:MM:SS]`. Every module gets timestamps for free — no per-file changes needed
 - **Graceful shutdown** — `index.ts` registers SIGTERM/SIGINT handlers that call `stopChannels()`, close Fastify, and clean up the PID file. Triggered by `openwren stop` or Ctrl+C in foreground mode
 - **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). Same-day hotfixes use a suffix: `YYYY.M.D-1`, `YYYY.M.D-2`, etc. `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills` (bundler doesn't copy non-TS assets). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source
+- **Search provider abstraction** — `src/search/` follows the same pattern as LLM providers. `SearchProvider` interface with `search(query, options)` method. `createSearchProvider()` factory reads `config.search.provider` and returns the correct implementation. Config layout: `search.provider` selects the backend, `search.{provider}.*` holds provider-specific settings. Adding a new search backend = one new file + config key, zero changes to tools or skills. Currently ships with Brave Search; future: Zenserp, Google Custom Search, SearXNG
+- **Fetch tool** — `src/tools/fetch.ts` uses `@mozilla/readability` + `linkedom` to extract article content from HTML. Readability strips navigation, ads, sidebars. Linkedom provides a lightweight DOM for readability to parse against. Output truncated to ~40K chars to prevent context window overflow. Accept header prefers `text/markdown` — if a server returns markdown, readability is skipped entirely (fast path). All fetched content runs through `scanContent()` which applies both hard and soft injection detection
+- **Prompt injection detection** — `src/tools/sanitize.ts` exports three functions. `detectInjection()` runs 8 hard patterns (ignore previous instructions, you are now a, etc.) — matched content is blocked and never reaches the LLM. `detectSuspicious()` runs 4 soft patterns (list tools/skills, reveal system prompt, respond in JSON, etc.) — matched content is logged but NOT blocked, relying on untrusted delimiters and the LLM's own judgment. `wrapUntrusted()` wraps all web content in `[BEGIN/END UNTRUSTED WEB CONTENT]` delimiters so the LLM can distinguish trusted instructions from external content. `fetch.ts` uses a `scanContent()` helper that runs both checks in sequence
+- **`list_shell_commands` tool** — returns the full whitelist of allowed shell commands with notes on restrictions (git subcommands, curl GET-only, destructive commands). The `shell_exec` tool description no longer lists commands inline — saves tokens on every API call. The agent calls `list_shell_commands` on demand when it needs to check what's allowed
+- **`requires.config` gate** — skill frontmatter supports `requires.config: [key.path]` to gate on config values. Traverses the config object using dot-notation and checks the value is set and truthy. Used by `web-search` skill to gate on `search.provider`
 - **`OPENWREN_HOME`** — env var to override workspace path. Used in both `config.ts` (main app) and `cli.ts` (standalone CLI). Defaults to `~/.openwren`. Useful for testing: `OPENWREN_HOME=~/.openwren-test openwren init`
 
 ---
@@ -283,4 +294,5 @@ Three run modes:
 - All secrets in `~/.openwren/.env`, referenced via `${env:VAR}` — config file is safe to share
 - Sandbox all file operations to the workspace directory
 - Treat all inbound content (web pages, search results) as potentially adversarial
+- Prompt injection defense: three layers — (1) regex hard-block for known jailbreak phrases, (2) `[BEGIN/END UNTRUSTED WEB CONTENT]` delimiters prime the LLM to distrust embedded instructions, (3) the LLM's own training to recognize injection attempts. Soft patterns log suspicious content without blocking
 - For WhatsApp (Phase 11): only ever install `@whiskeysockets/baileys` — never forks or similarly named packages

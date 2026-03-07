@@ -12,6 +12,7 @@ interface SkillRequires {
   env: string[];
   bins: string[];
   os: string; // "" means any platform
+  config: string[]; // dot-notation config keys that must be set and truthy
 }
 
 interface ParsedSkill {
@@ -189,6 +190,7 @@ function extractSkill(
       env: Array.isArray(requires.env) ? requires.env : [],
       bins: Array.isArray(requires.bins) ? requires.bins : [],
       os: typeof requires.os === "string" ? requires.os : "",
+      config: Array.isArray(requires.config) ? requires.config : [],
     },
     body,
     filePath,
@@ -219,7 +221,16 @@ function passesGates(skill: ParsedSkill): boolean {
     return false;
   }
 
-  // 4. Env gate — process.env includes .env loaded by dotenv at boot
+  // 4. Config gate — check dot-notation config keys are set and truthy
+  for (const dotPath of skill.requires.config) {
+    const value = dotPath.split(".").reduce((obj: any, key) => obj?.[key], config);
+    if (!value) {
+      console.log(`[skills] ${skill.name}: requires config ${dotPath} — not set`);
+      return false;
+    }
+  }
+
+  // 5. Env gate — process.env includes .env loaded by dotenv at boot
   for (const key of skill.requires.env) {
     if (!process.env[key]) {
       console.log(`[skills] ${skill.name}: requires env ${key} — not set`);
@@ -227,7 +238,7 @@ function passesGates(skill: ParsedSkill): boolean {
     }
   }
 
-  // 5. Binary gate (most expensive — spawns subprocess)
+  // 6. Binary gate (most expensive — spawns subprocess)
   for (const bin of skill.requires.bins) {
     if (!isBinaryAvailable(bin)) {
       console.log(`[skills] ${skill.name}: requires binary ${bin} — not found`);

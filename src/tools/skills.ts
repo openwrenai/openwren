@@ -17,7 +17,7 @@ export const loadSkillToolDefinition: ToolDefinition = {
     properties: {
       name: {
         type: "string",
-        description: "The skill name from the catalog (e.g. 'brave-search', 'agent-browser')",
+        description: "The skill name from the catalog (e.g. 'web-search', 'agent-browser')",
       },
     },
     required: ["name"],

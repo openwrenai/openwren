@@ -100,9 +100,6 @@ Add local LLM support via Ollama. Same `LLMProvider` interface — the agent loo
 - [ ] Test tool calling with Ollama model
 - [ ] Recommended models for function calling: `qwen3:8b`, `llama3.2`
 
-
-## Left to do Phases
-
 ### Phase 8 — Skills System
 
 Add a skills loader that injects capability instructions into the system prompt at session start. See `Skills.md` for full architecture and SKILL.md format.
@@ -114,30 +111,85 @@ Add a skills loader that injects capability instructions into the system prompt 
 - Trim `## Memory` and `## Tools` sections from default soul template in `workspace.ts` (existing user soul files untouched).
 
 **Tasks:**
-- [ ] `src/agent/skills.ts` — catalog builder: scan bundled → global → per-agent dirs, parse frontmatter (hand-rolled), gate checks (`requires.env`, `requires.bins`, `requires.os`), `enabled` check, config overrides. Returns catalog entries (name + description) and autoloaded skill bodies separately.
-- [ ] `src/tools/skills.ts` — `load_skill` tool: reads full SKILL.md body on demand, returns as tool result
-- [ ] `src/agent/prompt.ts` — append autoloaded skill bodies + skill catalog after soul.md
-- [ ] `src/tools/index.ts` — register `load_skill` tool
-- [ ] `src/config.ts` — add `skills` config section (`allowBundled`, `entries.<name>.enabled`, `load.extraDirs`)
-- [ ] `src/workspace.ts` — ensure `~/.openwren/skills/` directory exists; trim default soul template
-- [ ] Bundled skill: `src/skills/memory-management/SKILL.md` (`autoload: true`)
-- [ ] Bundled skill: `src/skills/file-operations/SKILL.md` (`autoload: true`)
-- [ ] Bundled skill stubs (Phase 9): `src/skills/brave-search/SKILL.md`, `src/skills/web-fetch/SKILL.md`, `src/skills/agent-browser/SKILL.md`
-- [ ] Update build script in `package.json` to copy `src/skills` to `dist/skills`
-- [ ] Update `CLAUDE.md` with skills architecture notes
-- [ ] Build and verify `npm run dev` works
+- [x] `src/agent/skills.ts` — catalog builder: scan bundled → global → per-agent dirs, parse frontmatter (hand-rolled), gate checks (`requires.env`, `requires.bins`, `requires.os`), `enabled` check, config overrides. Returns catalog entries (name + description) and autoloaded skill bodies separately.
+- [x] `src/tools/skills.ts` — `load_skill` tool: reads full SKILL.md body on demand, returns as tool result
+- [x] `src/agent/prompt.ts` — append autoloaded skill bodies + skill catalog after soul.md
+- [x] `src/tools/index.ts` — register `load_skill` tool
+- [x] `src/config.ts` — add `skills` config section (`allowBundled`, `entries.<name>.enabled`, `load.extraDirs`)
+- [x] `src/workspace.ts` — ensure `~/.openwren/skills/` directory exists; trim default soul template
+- [x] Bundled skill: `src/skills/memory-management/SKILL.md` (`autoload: true`)
+- [x] Bundled skill: `src/skills/file-operations/SKILL.md` (`autoload: true`)
+- [x] Bundled skill stubs (Phase 9): `src/skills/brave-search/SKILL.md`, `src/skills/web-fetch/SKILL.md`, `src/skills/agent-browser/SKILL.md`
+- [x] Update build script in `package.json` to copy `src/skills` to `dist/skills`
+- [x] Update `CLAUDE.md` with skills architecture notes
+- [x] Build and verify `npm run dev` works
+
+
+## Left to do Phases
 
 ### Phase 9 — Web Research (Search + Fetch + Browser)
 
-Add research tools and their skills. Skills system (Phase 8) must be done first so each tool ships with proper agent instructions.
+Add web research tools: search, fetch, and browser. Search uses a provider abstraction (like LLM providers) so backends are swappable via config. Fetch and browser are standalone tools.
 
-- [ ] `src/tools/search.ts` — Brave Search API wrapper (free API key at brave.com/search/api)
-- [ ] `src/tools/fetch.ts` — fetch URL, strip HTML with `@mozilla/readability`, truncate to ~3000 tokens
-- [ ] Wire both into the tool registry
-- [ ] Bundled skill: `src/skills/brave-search/SKILL.md` (gated on `BRAVE_API_KEY`)
-- [ ] Bundled skill: `src/skills/web-fetch/SKILL.md`
-- [ ] `src/tools/shell.ts` — add `agent-browser` commands to whitelist
-- [ ] Bundled skill: `src/skills/agent-browser/SKILL.md` (gated on `agent-browser` binary on PATH)
+**Design decisions:**
+- **Search provider abstraction** — `SearchProvider` interface in `src/search/`. Config selects the provider (`search.provider`), provider-specific settings live under `search.{provider}.*`. Adding a new search backend = one new file + config key, zero changes to tools or skills.
+- **Generic `SEARCH_API_KEY`** — single env var for whichever provider is active. Avoids per-provider env vars. Providers that don't need a key (e.g. self-hosted SearXNG) skip it.
+- **`requires.config` gate type** — new skill gate added to `skills.ts`. Checks if a config key is set and truthy. Used by `web-search` skill: `requires.config: [search.provider]`. Keeps gating provider-agnostic.
+- **Fetch truncation** — configurable max characters (default ~40K chars ≈ ~10K tokens). Generous enough to cover most articles in full, prevents a single fetch from blowing the context window.
+- **`@mozilla/readability` + `linkedom`** — readability extracts article content from HTML (strips nav, ads, sidebars). linkedom provides a lightweight DOM for readability to parse against. Standard pair, both well-maintained and widely used.
+- **agent-browser** — third-party CLI binary installed by the user (like ffmpeg). We just add it to the shell whitelist and provide the skill. Gated on `requires.bins: [agent-browser]` so the skill only appears when the binary is on PATH.
+- **Future search providers** — Zenserp (Google + YouTube + Shopping + Trends), Google Custom Search, SearXNG (self-hosted). The abstraction accommodates all of these.
+
+**Config example:**
+```json5
+{
+  "search.provider": "brave",
+  "search.brave.apiKey": "${env:SEARCH_API_KEY}",
+  // future:
+  // "search.zenserp.apiKey": "${env:SEARCH_API_KEY}",
+  // "search.searxng.baseUrl": "http://localhost:8080",
+}
+```
+
+**Tasks:**
+
+Search provider abstraction:
+- [x] `src/search/index.ts` — `SearchProvider` interface (`name`, `search(query, options) → SearchResult[]`), `SearchResult` type (`title`, `url`, `snippet`), `createSearchProvider()` factory that reads config and returns the right implementation
+- [x] `src/search/brave.ts` — Brave Search API implementation (free key at brave.com/search/api)
+- [x] `src/config.ts` — add `search` config section (`search.provider`, `search.brave.apiKey`)
+
+Search tool:
+- [x] `src/tools/search.ts` — `search_web` tool definition + executor. Calls `createSearchProvider()`, provider-agnostic. Returns formatted results (title, URL, snippet)
+- [x] `src/tools/index.ts` — register `search_web` tool
+
+Fetch tool:
+- [x] `npm install @mozilla/readability linkedom` — HTML parsing dependencies
+- [x] `src/tools/fetch.ts` — `fetch_url` tool. Fetches URL, parses with linkedom, extracts with readability, truncates to configurable max (~40K chars default)
+- [x] `src/tools/index.ts` — register `fetch_url` tool
+
+Skills:
+- [x] Rename `src/skills/brave-search/` → `src/skills/web-search/` — update SKILL.md to be provider-agnostic, gate with `requires.config: [search.provider]`
+- [x] `src/agent/skills.ts` — add `requires.config` gate type (check config key is set and truthy)
+- [x] Review `src/skills/web-fetch/SKILL.md` — already created in Phase 8, verify content is accurate
+- [x] Review `src/skills/agent-browser/SKILL.md` — already created in Phase 8, verify content is accurate
+
+Browser (agent-browser):
+- [x] `src/tools/shell.ts` — add `agent-browser` to `ALLOWED_COMMANDS` whitelist (no subcommand filtering, user opted in by installing it)
+
+Config & docs:
+- [x] `src/templates/openwren.json` — add search config section with commented examples
+- [x] `.env` template — add `SEARCH_API_KEY` placeholder
+- [x] Update `README.md` — search setup instructions, how to get a Brave API key
+- [x] Update `CLAUDE.md` — search provider architecture notes
+- [x] Build and verify `npm run dev` works
+
+**Post-implementation hardening:**
+- [x] **Untrusted content delimiters** — wrap all `fetch_url` and `search_web` tool results in `[BEGIN UNTRUSTED WEB CONTENT]...[END UNTRUSTED WEB CONTENT]` markers. Implemented via `wrapUntrusted()` in shared `src/tools/sanitize.ts`, applied in both `fetch.ts` and `search.ts`.
+- [x] **Prompt injection detection** — `detectInjection()` in `src/tools/sanitize.ts` scans content against 8 regex patterns (ignore previous instructions, you are now a, disregard prior, new system prompt, forget your instructions, override instructions, act as if no restrictions, pretend to be different). If triggered: bail early, return `[security] Blocked` message with matched phrase and URL, log to console. Applied in `fetch_url` (scan extracted text) and `search_web` (scan each snippet). False positives on articles about prompt injection are acceptable.
+- [x] **Soft pattern detection** — `detectSuspicious()` in `sanitize.ts` with 4 patterns for ambiguous injection attempts (list tools/skills, reveal system prompt, suppress security warnings, output format hijacking). Logged as `[security] Suspicious content...` but NOT blocked — relies on untrusted delimiters and LLM judgment. Applied in both `fetch.ts` (via `scanContent()` helper) and `search.ts`.
+- [x] **Markdown fast-path** — `fetch_url` sends `Accept: text/markdown` header (highest priority). If server responds with `content-type: text/markdown`, skip readability+linkedom entirely and return content directly. Most servers ignore the header and return HTML as before.
+- [x] **`list_shell_commands` tool** — moved command whitelist out of `shell_exec` description into a separate on-demand tool. Saves tokens per API call. Agent calls it when it needs to check what's allowed.
+- [x] **Fixed stale skill example** — `load_skill` description updated from `'brave-search'` to `'web-search'`.
 
 ### Phase 10 — Web UI (Dashboard)
 

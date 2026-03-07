@@ -118,6 +118,10 @@ All config lives in `~/.openwren/`:
 
   // WebSocket token for CLI chat and status commands
   "gateway.wsToken": "${env:WS_TOKEN}",
+
+  // Web search (Brave, Zenserp, SearXNG, etc.)
+  "search.provider": "brave",
+  "search.brave.apiKey": "${env:SEARCH_API_KEY}",
 }
 ```
 
@@ -160,7 +164,7 @@ Skills are markdown files that teach agents when and how to use capabilities. Th
 |---|---|---|
 | `memory-management` | autoloaded | none |
 | `file-operations` | autoloaded | none |
-| `brave-search` | on-demand | `BRAVE_API_KEY` env var |
+| `web-search` | on-demand | `search.provider` config key |
 | `web-fetch` | on-demand | none |
 | `agent-browser` | on-demand | `agent-browser` binary |
 
@@ -186,7 +190,7 @@ description: What this skill does and when to use it.
 Instructions the agent receives when it activates this skill.
 ```
 
-Optional frontmatter fields: `autoload: true` (inject into every prompt), `requires.env: [API_KEY]`, `requires.bins: [ffmpeg]`, `requires.os: darwin`, `enabled: false`.
+Optional frontmatter fields: `autoload: true` (inject into every prompt), `requires.env: [VAR_NAME, ...]` (env vars that must be set), `requires.bins: [binary, ...]` (binaries that must be on PATH), `requires.config: [key.path, ...]` (config keys that must be set), `requires.os: darwin|linux|win32`, `enabled: false`.
 
 ### Skills config
 
@@ -204,6 +208,37 @@ Optional frontmatter fields: `autoload: true` (inject into every prompt), `requi
 ```
 
 Per-agent skills override global skills with the same name. Global skills override bundled skills.
+
+---
+
+## Web Research
+
+Agents can search the web and fetch URLs. Search uses a provider abstraction — swap backends via config without changing code.
+
+### Search setup (Brave)
+
+1. Get a free API key at [brave.com/search/api](https://brave.com/search/api) (2,000 queries/month free)
+2. Add the key to `~/.openwren/.env`:
+   ```
+   SEARCH_API_KEY=your_key_here
+   ```
+3. Enable in `~/.openwren/openwren.json`:
+   ```json5
+   {
+     "search.provider": "brave",
+     "search.brave.apiKey": "${env:SEARCH_API_KEY}",
+   }
+   ```
+
+The `web-search` skill activates automatically when `search.provider` is set. Agents get a `search_web` tool for live web searches.
+
+### Fetch
+
+The `fetch_url` tool is always available — no config needed. Agents can fetch any URL, and the content is extracted using readability (navigation, ads, and sidebars are stripped). Results are truncated to ~40K characters to prevent context window overflow.
+
+### Browser (optional)
+
+For pages that need JavaScript rendering, install [agent-browser](https://github.com/nickarellano/agent-browser) and it becomes available via the `agent-browser` skill. Agents control it through shell commands (`agent-browser open`, `snapshot`, `click`, `fill`, `scroll`).
 
 ---
 

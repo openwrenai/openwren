@@ -66,6 +66,12 @@ export interface Config {
   gateway: {
     wsToken: string; // Bearer token for WS auth. Empty = WS disabled.
   };
+  search: {
+    provider: string; // "brave", "zenserp", "searxng", etc. Empty = search disabled.
+    brave: {
+      apiKey: string;
+    };
+  };
   skills: {
     allowBundled?: string[];  // whitelist of bundled skill names. undefined = all allowed.
     entries: Record<string, { enabled?: boolean }>;
@@ -137,6 +143,12 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
   session: {
     idleResetMinutes: 0,
     dailyResetTime: "",
+  },
+  search: {
+    provider: "",
+    brave: {
+      apiKey: "",
+    },
   },
   skills: {
     entries: {},

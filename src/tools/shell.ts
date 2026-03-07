@@ -16,6 +16,7 @@ const ALLOWED_COMMANDS = new Set([
   "npm", "npx", "node",
   "curl", "ping", "df", "du", "ps", "lsof",
   "date", "echo", "which",
+  "agent-browser",
 ]);
 
 // Commands that are allowed but require a confirmation step before execution.
@@ -127,10 +128,8 @@ export const shellToolDefinition: ToolDefinition = {
   name: "shell_exec",
   description:
     "Run a whitelisted shell command on the local machine. " +
-    "Allowed commands: ls, find, cat, head, tail, grep, wc, awk, sed, sort, uniq, jq, " +
-    "mkdir, touch, cp, mv, git (status/log/diff/pull/add/commit/push), " +
-    "npm run, npx, node, curl (GET only), ping, df, du, ps, lsof, date, echo, which. " +
-    "Destructive commands (mv, cp, mkdir, touch) require user confirmation before execution.",
+    "Only specific commands are allowed — use list_shell_commands to see what's available. " +
+    "Destructive commands require user confirmation before execution.",
   input_schema: {
     type: "object",
     properties: {
@@ -142,3 +141,29 @@ export const shellToolDefinition: ToolDefinition = {
     required: ["command"],
   },
 };
+
+export const listShellCommandsToolDefinition: ToolDefinition = {
+  name: "list_shell_commands",
+  description:
+    "List all whitelisted shell commands available for shell_exec. " +
+    "Call this when you need to check what commands are allowed.",
+  input_schema: {
+    type: "object",
+    properties: {},
+  },
+};
+
+export function listShellCommands(): string {
+  const commands = [...ALLOWED_COMMANDS].sort();
+  const destructive = [...DESTRUCTIVE_COMMANDS].sort();
+
+  return [
+    "Allowed commands: " + commands.join(", "),
+    "",
+    "Notes:",
+    "- git: only status, log, diff, pull, add, commit, push",
+    "- npm: only 'npm run'",
+    "- curl: GET only (no POST/PUT/PATCH/DELETE)",
+    "- Destructive (require confirmation): " + destructive.join(", "),
+  ].join("\n");
+}

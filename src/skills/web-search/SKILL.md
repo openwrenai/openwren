@@ -1,8 +1,8 @@
 ---
-name: brave-search
-description: Search the web using Brave Search API. Use when the user asks about current events, recent news, or anything that benefits from a live web search.
+name: web-search
+description: Search the web for current information. Use when the user asks about current events, recent news, or anything that benefits from a live web search.
 requires:
-  env: [BRAVE_API_KEY]
+  config: [search.provider]
 ---
 
 You have access to a `search_web` tool.

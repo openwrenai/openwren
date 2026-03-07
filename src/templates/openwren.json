@@ -53,6 +53,10 @@
   // "session.idleResetMinutes": 0,
   // "session.dailyResetTime": "",
 
+  // --- Search ---
+  // "search.provider": "brave",
+  // "search.brave.apiKey": "${env:SEARCH_API_KEY}",
+
   // --- Skills ---
   // Only allow specific bundled skills (omit to allow all):
   // "skills.allowBundled": ["memory-management", "file-operations"],
