@@ -242,6 +242,25 @@ For pages that need JavaScript rendering, install [agent-browser](https://github
 
 ---
 
+## Security
+
+Open Wren treats all inbound web content as potentially adversarial. Three layers of defense protect agents from prompt injection:
+
+1. **Pattern detection** — known jailbreak phrases ("ignore previous instructions", "you are now a", etc.) are detected and blocked before reaching the LLM. Suspicious but ambiguous patterns are logged for review but not blocked.
+
+2. **Untrusted content delimiters** — all web content (fetched pages, search snippets) is wrapped in `[BEGIN UNTRUSTED WEB CONTENT]...[END UNTRUSTED WEB CONTENT]` markers, priming the LLM to treat embedded instructions with skepticism.
+
+3. **LLM judgment** — Claude is trained to recognize injection attempts. Combined with the untrusted delimiters, even novel injection attempts that bypass pattern detection are reliably rejected.
+
+Additional security measures:
+- Gateway binds to `127.0.0.1` only — not exposed to the network
+- WebSocket auth via constant-time token comparison
+- File operations sandboxed to the workspace directory
+- Shell commands restricted to a whitelist (agents can call `list_shell_commands` to see what's allowed)
+- All secrets stay in `~/.openwren/.env`, never in config files
+
+---
+
 ## Discord Setup
 
 Before running a Discord bot, enable **Message Content Intent** in the Discord Developer Portal:
