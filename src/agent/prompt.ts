@@ -11,7 +11,11 @@ import { buildSkillCatalog } from "./skills";
  * Path is always: ~/.openwren/agents/{agentId}/soul.md
  * The agentId is the key in config, never stored in the soul file itself.
  */
-export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig): string {
+/**
+ * quiet=true suppresses per-skill log lines forwarded to buildSkillCatalog().
+ * Pass true when called from a scheduled job runner.
+ */
+export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig, quiet = false): string {
   const soulPath = path.join(
     config.workspaceDir,
     "agents",
@@ -29,7 +33,7 @@ export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig): str
   const soul = fs.readFileSync(soulPath, "utf-8").trim();
 
   // Build skill catalog for this agent
-  const { catalog, autoloaded } = buildSkillCatalog(agentId);
+  const { catalog, autoloaded } = buildSkillCatalog(agentId, quiet);
 
   // Autoloaded skill bodies — injected directly, no load_skill call needed.
   // Each is wrapped with a clear header so the agent knows its name and origin.

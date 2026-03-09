@@ -4,7 +4,8 @@ import * as util from "util";
 import { config } from "./config";
 import { initWorkspace } from "./workspace";
 import { startGateway, app } from "./gateway/server";
-import { startChannels, stopChannels } from "./channels";
+import { startChannels, stopChannels, setSchedulerStatusProvider } from "./channels";
+import { startScheduler, stopScheduler, getSchedulerStatus } from "./scheduler";
 
 // ---------------------------------------------------------------------------
 // Timestamped logging — prepend [YYYY-MM-DD HH:MM:SS] to all console output.
@@ -49,13 +50,20 @@ async function main() {
   // connection handler before Fastify starts listening.
   startChannels();
 
-  // Start Fastify gateway (health check, WebSocket /ws route)
+  // Start Fastify gateway (health check, WebSocket /ws route, schedule API)
   await startGateway();
+
+  // Start scheduler after channels (scheduler needs channels for delivery)
+  startScheduler();
+  // Wire up scheduler status into the WS status handler (done after start so
+  // the in-memory job state is initialized before any status requests arrive)
+  setSchedulerStatusProvider(getSchedulerStatus);
 
   // Register graceful shutdown — triggered by `openwren stop` (SIGTERM)
   // or Ctrl+C in foreground mode (SIGINT).
   const shutdown = async (signal: string) => {
     console.log(`\n[boot] Received ${signal}, shutting down...`);
+    stopScheduler(); // Cancel all timers before closing channels
     await stopChannels();
     if (app) await app.close();
 

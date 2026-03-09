@@ -1,6 +1,7 @@
 import Fastify, { FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
 import { config } from "../config";
+import { registerScheduleRoutes } from "./routes/schedules";
 
 /** The Fastify instance — available after startGateway() resolves. */
 export let app: FastifyInstance;
@@ -35,6 +36,9 @@ export async function startGateway(): Promise<void> {
     app.get("/ws", { websocket: true }, wsConnectionHandler);
     console.log("[websocket] WebSocket route registered at /ws");
   }
+
+  // Register schedule management REST API routes
+  await registerScheduleRoutes(app);
 
   const port = parseInt(process.env.PORT ?? "3000", 10);
   const host = "127.0.0.1"; // never expose to 0.0.0.0

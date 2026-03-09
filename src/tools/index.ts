@@ -5,6 +5,7 @@ import { saveMemoryToolDefinition, searchMemoryToolDefinition, saveMemory, searc
 import { loadSkillToolDefinition, loadSkill } from "./skills";
 import { searchWebToolDefinition, searchWeb } from "./search";
 import { fetchUrlToolDefinition, fetchUrl } from "./fetch";
+import { manageScheduleToolDefinition, manageSchedule } from "./schedule";
 import { isApproved, permanentlyApprove } from "./approvals";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     loadSkillToolDefinition,
     searchWebToolDefinition,
     fetchUrlToolDefinition,
+    manageScheduleToolDefinition,
   ];
 }
 
@@ -108,6 +110,9 @@ export async function executeTool(
 
       case "fetch_url":
         return await fetchUrl(input.url as string);
+
+      case "manage_schedule":
+        return await manageSchedule(input, agentId);
 
       default:
         return `[tool error] Unknown tool: "${name}"`;

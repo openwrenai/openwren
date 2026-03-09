@@ -18,4 +18,15 @@ export interface Channel {
 
   /** Graceful shutdown */
   stop(): Promise<void>;
+
+  /**
+   * Send a proactive message to a user on this channel.
+   * Used by the scheduler to deliver cron/heartbeat results without an incoming message.
+   *
+   * @param userId - The config user ID (e.g. "owner"), NOT the platform-specific sender ID
+   * @param agentId - Which agent is sending (to resolve the correct bot/binding)
+   * @param text - The message text to deliver
+   * @returns true if delivered, false if the channel couldn't deliver (not configured, user not found)
+   */
+  sendMessage?(userId: string, agentId: string, text: string): Promise<boolean>;
 }

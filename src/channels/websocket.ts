@@ -50,6 +50,32 @@ interface WsStatusRequest {
 type WsClientMessage = WsSendMessage | WsConfirmResponse | WsStatusRequest;
 
 // ---------------------------------------------------------------------------
+// Scheduler status provider
+//
+// A function that returns live scheduler status, registered by index.ts after
+// the scheduler starts. Kept here as a callback to avoid a circular import:
+//   websocket.ts → scheduler/index.ts → runner.ts → channels/index.ts → websocket.ts
+// ---------------------------------------------------------------------------
+
+type SchedulerStatusFn = () => {
+  enabled: boolean;
+  jobs: { total: number; enabled: number };
+  nextRun: { jobId: string | null; time: string } | null;
+  queuePending: number;
+  queueProcessing: boolean;
+};
+
+let schedulerStatusProvider: SchedulerStatusFn | null = null;
+
+/**
+ * Register the scheduler status getter. Called once by index.ts after
+ * startScheduler() so the WS status response includes scheduler info.
+ */
+export function setSchedulerStatusProvider(fn: SchedulerStatusFn): void {
+  schedulerStatusProvider = fn;
+}
+
+// ---------------------------------------------------------------------------
 // Connected client tracking
 // ---------------------------------------------------------------------------
 
@@ -140,6 +166,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       agents: Object.entries(config.agents).map(([id, a]) => ({ id, name: a.name })),
       channels: ["telegram", "discord", "websocket"],
       uptime: Math.floor(process.uptime()),
+      scheduler: schedulerStatusProvider ? schedulerStatusProvider() : null,
       timestamp: Date.now(),
     });
     return;
@@ -287,6 +314,8 @@ class WebSocketChannel implements Channel {
       "agent_error",
       "status",
       "confirm_request",
+      "schedule_run",
+      "schedule_error",
     ];
     for (const eventName of eventNames) {
       bus.on(eventName, (payload) => broadcast(eventName, payload));

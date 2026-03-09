@@ -11,14 +11,19 @@ import { config } from "./config";
  * │   ├── {userId}/          ← one per user in config
  * │   │   ├── atlas/          ← one per agent
  * │   │   ├── einstein/
- * │   │   └── wizard/
+ * │   │   ├── wizard/
+ * │   │   └── jobs/           ← isolated job sessions ({jobId}.jsonl)
  * │   └── local/             ← scratch/dev sessions
  * │       ├── main/
  * │       └── ...
  * ├── memory/
+ * ├── schedules/
+ * │   ├── jobs.json           ← all scheduled jobs (loaded into memory on startup)
+ * │   └── runs/               ← run history JSONL per job
  * └── agents/
  *     └── atlas/
- *         └── soul.md
+ *         ├── soul.md
+ *         └── heartbeat.md   ← optional heartbeat checklist
  */
 export function initWorkspace(): void {
   const dirs = [
@@ -27,6 +32,8 @@ export function initWorkspace(): void {
     path.join(config.workspaceDir, "memory"),
     path.join(config.workspaceDir, "agents"),
     path.join(config.workspaceDir, "skills"),
+    path.join(config.workspaceDir, "schedules"),
+    path.join(config.workspaceDir, "schedules", "runs"),
   ];
 
   for (const dir of dirs) {
@@ -41,6 +48,12 @@ export function initWorkspace(): void {
   const agentIds = Object.keys(config.agents);
 
   for (const userId of userIds) {
+    // Create jobs directory for isolated job sessions
+    const jobsDir = path.join(config.workspaceDir, "sessions", userId, "jobs");
+    if (!fs.existsSync(jobsDir)) {
+      fs.mkdirSync(jobsDir, { recursive: true });
+    }
+
     for (const agentId of agentIds) {
       const sessionDir = path.join(config.workspaceDir, "sessions", userId, agentId);
       if (!fs.existsSync(sessionDir)) {

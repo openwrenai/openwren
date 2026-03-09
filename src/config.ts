@@ -79,6 +79,21 @@ export interface Config {
       extraDirs: string[];
     };
   };
+  scheduler: {
+    enabled: boolean;
+    runHistory: {
+      logRetention: number;     // max run log entries per job (schedules/runs/*.jsonl)
+      sessionRetention: number; // max runs to keep in isolated job sessions (sessions/*/jobs/*.jsonl)
+    };
+  };
+  heartbeat: {
+    enabled: boolean;
+    every: string;     // interval string e.g. "30m"
+    activeHours: {
+      start: string;   // "HH:MM" e.g. "08:00", empty = no restriction
+      end: string;     // "HH:MM" e.g. "22:00", empty = no restriction
+    };
+  };
   agent: {
     maxIterations: number;
     compaction: {
@@ -154,6 +169,21 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
     entries: {},
     load: {
       extraDirs: [],
+    },
+  },
+  scheduler: {
+    enabled: true,
+    runHistory: {
+      logRetention: 500,
+      sessionRetention: 50,
+    },
+  },
+  heartbeat: {
+    enabled: false,
+    every: "30m",
+    activeHours: {
+      start: "",
+      end: "",
     },
   },
   agent: {

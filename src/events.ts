@@ -70,6 +70,13 @@ export interface StatusEvent {
   agents: Array<{ id: string; name: string }>;
   channels: string[]; // names of active channels
   uptime: number;     // seconds since process start
+  scheduler: {
+    enabled: boolean;
+    jobs: { total: number; enabled: number };
+    nextRun: { jobId: string | null; time: string } | null;
+    queuePending: number;
+    queueProcessing: boolean;
+  } | null;           // null when scheduler is disabled or not yet started
   timestamp: number;
 }
 
@@ -79,6 +86,26 @@ export interface ConfirmRequestEvent {
   agentId: string;
   agentName: string;
   command: string;   // the shell command awaiting approval
+  timestamp: number;
+}
+
+/** A scheduled job completed a run (ok or suppressed). */
+export interface ScheduleRunEvent {
+  jobId: string;
+  agentId: string;
+  agentName: string;
+  status: "ok";
+  suppressed: boolean; // true if HEARTBEAT_OK
+  timestamp: number;
+}
+
+/** A scheduled job failed. */
+export interface ScheduleErrorEvent {
+  jobId: string;
+  agentId: string;
+  agentName: string;
+  error: string;
+  errorType: "transient" | "permanent";
   timestamp: number;
 }
 
@@ -94,6 +121,8 @@ export interface BusEvents {
   agent_error: AgentErrorEvent;
   status: StatusEvent;
   confirm_request: ConfirmRequestEvent;
+  schedule_run: ScheduleRunEvent;
+  schedule_error: ScheduleErrorEvent;
 }
 
 export type BusEventName = keyof BusEvents;
