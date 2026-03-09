@@ -36,11 +36,29 @@ export function clearPendingConfirmation(chatId: number): void {
 
 /**
  * Converts standard markdown to Telegram-compatible markdown.
- * Telegram only supports: **bold**, *italic*, `code`, ```code blocks```, [links].
- * Headers (# ## ###) are converted to **bold** text.
+ *
+ * Telegram's legacy Markdown mode only supports: **bold**, *italic*,
+ * `inline code`, ```code blocks```, and [links](url).
+ *
+ * Everything else the model might produce (headings, blockquotes,
+ * strikethrough, image syntax, etc.) is stripped or converted so the
+ * message never fails Telegram's parser.
  */
 function formatForTelegram(text: string): string {
-  return text.replace(/^(#{1,6})\s+(.+)$/gm, "**$2**");
+  let result = text;
+  // # headings → **bold**
+  result = result.replace(/^(#{1,6})\s+(.+)$/gm, "**$2**");
+  // > blockquotes → plain text (not supported)
+  result = result.replace(/^>\s?/gm, "");
+  // --- horizontal rules → remove (not supported)
+  result = result.replace(/^-{3,}$/gm, "");
+  // - / * bullet markers → • (Telegram renders as plain text)
+  result = result.replace(/^[\-\*]\s+/gm, "• ");
+  // ~~strikethrough~~ → plain text (not supported in legacy mode)
+  result = result.replace(/~~(.+?)~~/g, "$1");
+  // ![alt](url) images → just the URL (can't render images as text)
+  result = result.replace(/!\[.*?\]\((.+?)\)/g, "$1");
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +67,16 @@ function formatForTelegram(text: string): string {
 // Each bot is hardwired to exactly one agent via its binding.
 // ---------------------------------------------------------------------------
 
+/**
+ * Wire all middleware and handlers onto a grammY Bot instance.
+ *
+ * @param bot - A grammY Bot instance created from a Telegram bot token.
+ *              One bot per agent — each Telegram bot maps to exactly one agent.
+ * @param agentId - The agent key in config (e.g. "atlas", "einstein").
+ *                  Used for session lookup, user resolution, and event emission.
+ * @param agentConfig - The agent's config entry (name, model overrides, etc.).
+ *                      Used for display name in replies and logging.
+ */
 function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
   // Per-sender sliding window rate limiter
   const rateLimitMap = new Map<number, number[]>();
@@ -188,9 +216,12 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
         await ctx.reply("📦 Session compacted — older messages summarized.");
       }
 
-      const formatted = formatForTelegram(`**${agentConfig.name}:** ${result.text}`);
+      const formatted = formatForTelegram(result.text);
 
-      // Telegram has a 4096 char message limit — split if needed
+      // Telegram has a 4096 char message limit — split if needed.
+      // ctx.reply() is grammY's context shorthand — it calls
+      // bot.api.sendMessage(ctx.chat.id, ...) under the hood, replying
+      // to the same chat the incoming message came from.
       if (formatted.length <= 4096) {
         await ctx.reply(formatted, { parse_mode: "Markdown" });
       } else {
@@ -209,7 +240,7 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
         channel: "telegram", userId, agentId, agentName: agentConfig.name,
         error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
       });
-      await ctx.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`, { parse_mode: "Markdown" });
+      await ctx.reply("Sorry, something went wrong. Please try again.");
     }
   });
 
@@ -264,6 +295,45 @@ class TelegramChannel implements Channel {
       bot.stop();
     }
     this.bots = [];
+  }
+
+  /**
+   * Send a proactive message to a user via Telegram.
+   * Looks up the user's Telegram chat ID from config, then finds the
+   * bot bound to the given agent and calls bot.api.sendMessage().
+   *
+   * Used by the scheduler for cron/heartbeat delivery.
+   */
+  async sendMessage(userId: string, agentId: string, text: string): Promise<boolean> {
+    // Find the user's Telegram chat ID
+    const userConfig = config.users[userId];
+    if (!userConfig) return false;
+
+    const chatId = userConfig.channelIds.telegram;
+    if (!chatId) return false;
+
+    // Find the bot bound to this agent
+    const entry = this.bots.find((b) => b.agentId === agentId);
+    if (!entry) return false;
+
+    const formatted = formatForTelegram(text);
+
+    try {
+      // Telegram has a 4096 char message limit — split if needed.
+      // Uses bot.api.sendMessage() directly (not ctx.reply()) because
+      // this is a proactive message — no incoming ctx to reply to.
+      if (formatted.length <= 4096) {
+        await entry.bot.api.sendMessage(Number(chatId), formatted, { parse_mode: "Markdown" });
+      } else {
+        for (let i = 0; i < formatted.length; i += 4096) {
+          await entry.bot.api.sendMessage(Number(chatId), formatted.slice(i, i + 4096), { parse_mode: "Markdown" });
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error(`[telegram] Failed to send proactive message to ${userId}:`, err);
+      return false;
+    }
   }
 }
 

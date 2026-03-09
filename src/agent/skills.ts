@@ -199,25 +199,29 @@ function extractSkill(
 
 // ---------------------------------------------------------------------------
 // Gate checks
+//
+// quiet=true suppresses all per-skill log lines. Used by scheduled job runs
+// to avoid noisy repetitive output when jobs fire frequently. The catalog is
+// still rebuilt in full — quiet only affects logging, not behaviour.
 // ---------------------------------------------------------------------------
 
-function passesGates(skill: ParsedSkill): boolean {
+function passesGates(skill: ParsedSkill, quiet = false): boolean {
   // 1. Frontmatter enabled check
   if (!skill.enabled) {
-    console.log(`[skills] ${skill.name}: disabled in frontmatter`);
+    if (!quiet) console.log(`[skills] ${skill.name}: disabled in frontmatter`);
     return false;
   }
 
   // 2. Config override: skills.entries.<name>.enabled
   const configEntry = config.skills?.entries?.[skill.name];
   if (configEntry && configEntry.enabled === false) {
-    console.log(`[skills] ${skill.name}: disabled in config`);
+    if (!quiet) console.log(`[skills] ${skill.name}: disabled in config`);
     return false;
   }
 
   // 3. OS gate (cheapest — string compare)
   if (skill.requires.os && skill.requires.os !== process.platform) {
-    console.log(`[skills] ${skill.name}: requires os=${skill.requires.os}, running ${process.platform}`);
+    if (!quiet) console.log(`[skills] ${skill.name}: requires os=${skill.requires.os}, running ${process.platform}`);
     return false;
   }
 
@@ -225,7 +229,7 @@ function passesGates(skill: ParsedSkill): boolean {
   for (const dotPath of skill.requires.config) {
     const value = dotPath.split(".").reduce((obj: any, key) => obj?.[key], config);
     if (!value) {
-      console.log(`[skills] ${skill.name}: requires config ${dotPath} — not set`);
+      if (!quiet) console.log(`[skills] ${skill.name}: requires config ${dotPath} — not set`);
       return false;
     }
   }
@@ -233,7 +237,7 @@ function passesGates(skill: ParsedSkill): boolean {
   // 5. Env gate — process.env includes .env loaded by dotenv at boot
   for (const key of skill.requires.env) {
     if (!process.env[key]) {
-      console.log(`[skills] ${skill.name}: requires env ${key} — not set`);
+      if (!quiet) console.log(`[skills] ${skill.name}: requires env ${key} — not set`);
       return false;
     }
   }
@@ -241,7 +245,7 @@ function passesGates(skill: ParsedSkill): boolean {
   // 6. Binary gate (most expensive — spawns subprocess)
   for (const bin of skill.requires.bins) {
     if (!isBinaryAvailable(bin)) {
-      console.log(`[skills] ${skill.name}: requires binary ${bin} — not found`);
+      if (!quiet) console.log(`[skills] ${skill.name}: requires binary ${bin} — not found`);
       return false;
     }
   }
@@ -325,8 +329,10 @@ function resolvePath(raw: string): string {
  * 2. Global:   ~/.openwren/skills/
  * 3. Extra dirs from config
  * 4. Bundled:  shipped with Open Wren (lowest)
+ *
+ * quiet=true suppresses per-skill log lines (used by scheduled job runner).
  */
-export function buildSkillCatalog(agentId: string): SkillLoadResult {
+export function buildSkillCatalog(agentId: string, quiet = false): SkillLoadResult {
   // Scan in reverse precedence order — later entries overwrite earlier ones
   const seen = new Map<string, ParsedSkill>();
 
@@ -360,15 +366,15 @@ export function buildSkillCatalog(agentId: string): SkillLoadResult {
   const agentCache = new Map<string, ParsedSkill>();
 
   for (const skill of seen.values()) {
-    if (!passesGates(skill)) continue;
+    if (!passesGates(skill, quiet)) continue;
 
     if (skill.autoload) {
       autoloaded.push({ name: skill.name, body: skill.body });
-      console.log(`[skills] ${skill.name}: autoloaded`);
+      if (!quiet) console.log(`[skills] ${skill.name}: autoloaded`);
     } else {
       catalog.push({ name: skill.name, description: skill.description });
       agentCache.set(skill.name, skill);
-      console.log(`[skills] ${skill.name}: added to catalog`);
+      if (!quiet) console.log(`[skills] ${skill.name}: added to catalog`);
     }
   }
 

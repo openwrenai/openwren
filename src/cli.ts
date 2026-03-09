@@ -261,6 +261,19 @@ async function cmdStatus(): Promise<void> {
         console.log(`Uptime:   ${formatUptime(p.uptime)}`);
         console.log(`Agents:   ${p.agents.map((a: any) => `${a.name} (${a.id})`).join(", ")}`);
         console.log(`Channels: ${p.channels.join(", ")}`);
+        if (p.scheduler) {
+          const s = p.scheduler;
+          const jobStr = `${s.jobs.total} jobs (${s.jobs.enabled} enabled)`;
+          const nextStr = s.nextRun
+            ? `next: ${fmtDate(s.nextRun.time)} (${s.nextRun.jobId})`
+            : "none scheduled";
+          const queueStr = s.queueProcessing
+            ? " — running"
+            : s.queuePending > 0
+              ? ` — ${s.queuePending} queued`
+              : "";
+          console.log(`Schedule: ${jobStr}, ${nextStr}${queueStr}`);
+        }
         ws.close();
         resolve();
       }
@@ -523,6 +536,249 @@ Setup complete! Next steps:
 }
 
 // ---------------------------------------------------------------------------
+// Command: schedule — manage scheduled jobs via REST API
+// ---------------------------------------------------------------------------
+
+/** Base URL for the schedule REST API on the running daemon. */
+function apiUrl(path: string): string {
+  const port = getPort();
+  return `http://127.0.0.1:${port}${path}`;
+}
+
+/** Make an authenticated HTTP request to the daemon's REST API. */
+async function apiRequest(
+  method: string,
+  path: string,
+  body?: Record<string, unknown>
+): Promise<{ status: number; data: any }> {
+  const token = readWsToken();
+  if (!token) {
+    console.error("WS_TOKEN not set in ~/.openwren/.env — cannot connect to API.");
+    process.exit(1);
+  }
+
+  const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
+  if (body) headers["Content-Type"] = "application/json";
+
+  const options: RequestInit = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+
+  const res = await fetch(apiUrl(path), options);
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, data };
+}
+
+/** Format a date string for display (compact). */
+function fmtDate(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return d.toLocaleString("sv-SE", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+async function cmdSchedule(args: string[]): Promise<void> {
+  const sub = args[0];
+
+  switch (sub) {
+    case "list": {
+      const { status, data } = await apiRequest("GET", "/api/schedules");
+      if (status !== 200) {
+        console.error("Failed to fetch schedules:", data.error ?? status);
+        return;
+      }
+
+      const jobs = data.jobs as any[];
+      if (jobs.length === 0) {
+        console.log("No scheduled jobs.");
+        return;
+      }
+
+      // Table header
+      console.log(
+        "ID".padEnd(25) +
+        "Name".padEnd(25) +
+        "Schedule".padEnd(20) +
+        "Agent".padEnd(12) +
+        "Status".padEnd(10) +
+        "Next Run"
+      );
+      console.log("-".repeat(100));
+
+      for (const j of jobs) {
+        const schedule = j.schedule?.cron ?? j.schedule?.every ?? j.schedule?.at ?? "?";
+        const status = j.enabled ? "enabled" : "disabled";
+        console.log(
+          j.jobId.padEnd(25) +
+          (j.name ?? "").slice(0, 24).padEnd(25) +
+          schedule.slice(0, 19).padEnd(20) +
+          (j.agent ?? "").padEnd(12) +
+          status.padEnd(10) +
+          fmtDate(j.nextRun)
+        );
+      }
+      break;
+    }
+
+    case "create": {
+      // Parse --flag value pairs from args (args[0] is "create", skip it)
+      const flags: Record<string, string> = {};
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith("--") && i + 1 < args.length) {
+          flags[arg.slice(2)] = args[++i];
+        }
+      }
+
+      let name: string;
+      let agent: string;
+      let scheduleStr: string;
+      let prompt: string;
+      let channel: string;
+      let user: string;
+
+      if (flags.name && flags.schedule && flags.prompt) {
+        // Inline mode — all required flags provided
+        name = flags.name;
+        agent = flags.agent ?? "atlas";
+        scheduleStr = flags.schedule;
+        prompt = flags.prompt;
+        channel = flags.channel ?? "telegram";
+        user = flags.user ?? "owner";
+      } else {
+        // Interactive mode — prompt for missing values
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const ask = (q: string): Promise<string> => new Promise((resolve) => rl.question(q, resolve));
+
+        name = await ask("Job name: ");
+        agent = await ask("Agent (default: atlas): ") || "atlas";
+        console.log('Schedule format: cron:0 8 * * * | every:2h | at:2026-03-15T09:00:00 (or bare value)');
+        scheduleStr = await ask("Schedule: ");
+        prompt = await ask("Prompt (what the agent should do): ");
+        channel = await ask("Channel (default: telegram): ") || "telegram";
+        user = await ask("User (default: owner): ") || "owner";
+        rl.close();
+      }
+
+      if (!name || !scheduleStr || !prompt) {
+        console.error("Name, schedule, and prompt are required.");
+        return;
+      }
+
+      // Parse schedule string into object
+      // Supported formats (prefix or bare):
+      //   cron:0 8 * * *    or   "0 8 * * *"        (auto-detect: contains * or 5+ fields)
+      //   every:2h          or   2h                  (auto-detect: digits + m/h/d)
+      //   at:2026-03-15T09:00   or   2026-03-15T09:00  (auto-detect: fallback)
+      let schedule: Record<string, string>;
+      if (/^(cron|every|at):/.test(scheduleStr)) {
+        const colonIdx = scheduleStr.indexOf(":");
+        schedule = { [scheduleStr.slice(0, colonIdx)]: scheduleStr.slice(colonIdx + 1) };
+      } else {
+        // Heuristic: if it contains spaces/stars it's cron, if it has m/h/d it's interval, otherwise at
+        if (scheduleStr.includes("*") || scheduleStr.split(" ").length >= 5) {
+          schedule = { cron: scheduleStr };
+        } else if (/^\d+[mhd]$/.test(scheduleStr)) {
+          schedule = { every: scheduleStr };
+        } else {
+          schedule = { at: scheduleStr };
+        }
+      }
+
+      // Auto-append :00 seconds if at value has only HH:MM
+      if (schedule.at && /T\d{2}:\d{2}$/.test(schedule.at)) {
+        schedule.at += ":00";
+      }
+
+      const { status, data } = await apiRequest("POST", "/api/schedules", {
+        name, agent, schedule, prompt, channel, user,
+      });
+
+      if (status === 201) {
+        console.log(`✓ Created job "${data.jobId}"`);
+      } else {
+        console.error("Failed:", data.error ?? status);
+      }
+      break;
+    }
+
+    case "enable": {
+      const jobId = args[1];
+      if (!jobId) { console.error("Usage: openwren schedule enable <jobId>"); return; }
+      const { status, data } = await apiRequest("POST", `/api/schedules/${jobId}/enable`);
+      console.log(status === 200 ? `✓ Enabled "${jobId}"` : `Failed: ${data.error ?? status}`);
+      break;
+    }
+
+    case "disable": {
+      const jobId = args[1];
+      if (!jobId) { console.error("Usage: openwren schedule disable <jobId>"); return; }
+      const { status, data } = await apiRequest("POST", `/api/schedules/${jobId}/disable`);
+      console.log(status === 200 ? `✓ Disabled "${jobId}"` : `Failed: ${data.error ?? status}`);
+      break;
+    }
+
+    case "delete": {
+      const jobId = args[1];
+      if (!jobId) { console.error("Usage: openwren schedule delete <jobId>"); return; }
+      const { status, data } = await apiRequest("DELETE", `/api/schedules/${jobId}`);
+      console.log(status === 200 ? `✓ Deleted "${jobId}"` : `Failed: ${data.error ?? status}`);
+      break;
+    }
+
+    case "run": {
+      const jobId = args[1];
+      if (!jobId) { console.error("Usage: openwren schedule run <jobId>"); return; }
+      const { status, data } = await apiRequest("POST", `/api/schedules/${jobId}/run`);
+      console.log(status === 200 ? `✓ Triggered "${jobId}"` : `Failed: ${data.error ?? status}`);
+      break;
+    }
+
+    case "history": {
+      const jobId = args[1];
+      if (!jobId) { console.error("Usage: openwren schedule history <jobId>"); return; }
+      const { status, data } = await apiRequest("GET", `/api/schedules/${jobId}/history`);
+      if (status !== 200) { console.error("Failed:", data.error ?? status); return; }
+
+      const runs = data.runs as any[];
+      if (runs.length === 0) { console.log("No run history."); return; }
+
+      console.log(
+        "Time".padEnd(20) + "Status".padEnd(10) + "Duration".padEnd(12) +
+        "Tokens".padEnd(10) + "Delivered".padEnd(12) + "Error"
+      );
+      console.log("-".repeat(80));
+
+      for (const r of runs) {
+        const time = new Date(r.ts).toLocaleString("sv-SE", {
+          month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+        });
+        const dur = r.durationMs ? `${(r.durationMs / 1000).toFixed(1)}s` : "-";
+        const delivered = r.suppressed ? `no (${r.suppressed})` : r.delivered ? "yes" : "no";
+        console.log(
+          time.padEnd(20) + r.status.padEnd(10) + dur.padEnd(12) +
+          String(r.tokens ?? 0).padEnd(10) + delivered.padEnd(12) + (r.error ?? "")
+        );
+      }
+      break;
+    }
+
+    default:
+      console.log(`
+Schedule Commands:
+  openwren schedule list                List all scheduled jobs
+  openwren schedule create              Create a new job (interactive prompts)
+  openwren schedule create --name "..." --schedule "..." --prompt "..."
+                                        Create inline (--agent, --channel, --user optional)
+  openwren schedule enable <jobId>      Enable a disabled job
+  openwren schedule disable <jobId>     Disable a job
+  openwren schedule delete <jobId>      Delete a job and its history
+  openwren schedule run <jobId>         Trigger immediate execution
+  openwren schedule history <jobId>     Show run history for a job
+`);
+      break;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
 
@@ -533,13 +789,14 @@ Open Wren CLI
 Usage: openwren <command> [options]
 
 Commands:
-  init            Initialize workspace (~/.openwren) with template files
-  start           Start the bot as a background daemon
-  stop            Stop the running daemon
-  restart         Stop and restart the daemon
-  status          Show running agents, channels, and uptime
-  logs            Tail the daemon log file
-  chat [agent]    Interactive terminal chat (default: atlas)
+  init              Initialize workspace (~/.openwren) with template files
+  start             Start the bot as a background daemon
+  stop              Stop the running daemon
+  restart           Stop and restart the daemon
+  status            Show running agents, channels, and uptime
+  logs              Tail the daemon log file
+  chat [agent]      Interactive terminal chat (default: atlas)
+  schedule [cmd]    Manage scheduled jobs (list, create, enable, disable, delete, run, history)
 `);
 }
 
@@ -557,8 +814,9 @@ async function main(): Promise<void> {
     case "restart": await cmdRestart();     break;
     case "status":  await cmdStatus();      break;
     case "logs":    cmdLogs();              break;
-    case "chat":    await cmdChat(args[0]); break;
-    default:        printUsage();           break;
+    case "chat":     await cmdChat(args[0]);   break;
+    case "schedule": await cmdSchedule(args); break;
+    default:         printUsage();            break;
   }
 }
 

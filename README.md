@@ -14,6 +14,8 @@ Multiple agents with distinct personalities (Atlas, Einstein, Wizard, Coach). Ea
 - **Session compaction** — long conversations are summarized automatically; originals are archived
 - **Persistent shell approval** — approve shell commands once per agent, stored in `exec-approvals.json`
 - **CLI management** — start, stop, restart, tail logs, and chat interactively from your terminal
+- **Scheduled tasks** — cron jobs, interval timers, and one-shot reminders. Agents can create schedules on your behalf
+- **Heartbeat** — periodic agent check-ins with smart suppression (silent when nothing to report)
 - **Zero code changes to add agents** — create a soul file and add config keys, that's it
 
 ---
@@ -239,6 +241,38 @@ The `fetch_url` tool is always available — no config needed. Agents can fetch 
 ### Browser (optional)
 
 For pages that need JavaScript rendering, install [agent-browser](https://github.com/nickarellano/agent-browser) and it becomes available via the `agent-browser` skill. Agents control it through shell commands (`agent-browser open`, `snapshot`, `click`, `fill`, `scroll`).
+
+---
+
+## Scheduled Tasks
+
+Agents can run tasks on a schedule — morning briefings, recurring reminders, one-shot alerts. Three schedule types:
+
+- **Cron** — `0 8 * * 1-5` (weekdays at 8am), `0 */2 * * *` (every 2 hours)
+- **Interval** — `30m`, `2h`, `1d` (simple repeating timer)
+- **One-shot** — `2026-03-15T09:00:00` (fires once, auto-disables)
+
+Create schedules three ways:
+- **Ask your agent** — "remind me to drink water every 2 hours"
+- **CLI** — `openwren schedule create` (interactive prompts)
+- **REST API** — `POST /api/schedules` (for automation)
+
+Manage via CLI: `openwren schedule list`, `enable`, `disable`, `delete`, `run`, `history`.
+
+### Heartbeat
+
+A periodic check-in where agents read a checklist and only message you if something matters. Create `~/.openwren/agents/atlas/heartbeat.md` with your checklist, then enable in config:
+
+```json5
+{
+  "heartbeat.enabled": true,
+  "heartbeat.every": "30m",
+  "heartbeat.activeHours.start": "08:00",
+  "heartbeat.activeHours.end": "22:00",
+}
+```
+
+If the agent has nothing to report, it stays silent (HEARTBEAT_OK suppression).
 
 ---
 

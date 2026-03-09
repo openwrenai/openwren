@@ -189,11 +189,9 @@ function getTimezoneOffsetMs(tz: string, date: Date): number {
 const locks = new Map<string, Promise<void>>();
 
 export function withSessionLock<T>(
-  userId: string,
-  agentId: string,
+  lockKey: string,
   fn: () => Promise<T>
 ): Promise<T> {
-  const lockKey = `${userId}/${agentId}`;
   const previous = locks.get(lockKey) ?? Promise.resolve();
 
   let releaseLock!: () => void;
@@ -367,4 +365,93 @@ ${messages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : 
   console.log(`[compaction] Done. Reduced ${messages.length} messages to 1 summary.`);
 
   return { messages: compactedMessages, compacted: true, nearThreshold: false };
+}
+
+// ---------------------------------------------------------------------------
+// Isolated job sessions — separate session files for scheduled jobs
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the file path for an isolated job session.
+ * Path: {workspace}/sessions/{userId}/jobs/{jobId}.jsonl
+ *
+ * Scoped to user (not agent) so reassigning a job to a different agent
+ * preserves the session history without orphaning files.
+ */
+export function jobSessionFilePath(userId: string, jobId: string): string {
+  return path.join(config.workspaceDir, "sessions", userId, "jobs", `${jobId}.jsonl`);
+}
+
+/**
+ * Load messages from a specific file path.
+ * Used for isolated job sessions where the path doesn't follow the
+ * standard user/agent layout.
+ */
+export function loadFromFile(filePath: string): TimestampedMessage[] {
+  if (!fs.existsSync(filePath)) return [];
+
+  const lines = fs.readFileSync(filePath, "utf-8").split("\n");
+  const messages: TimestampedMessage[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.role && parsed.content !== undefined) {
+        messages.push(parsed as TimestampedMessage);
+      }
+    } catch {
+      // Malformed line — skip silently
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Append a message to a specific file path.
+ * Creates the parent directory if it doesn't exist.
+ */
+export function appendToFile(filePath: string, message: Message): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const timestamped: TimestampedMessage = {
+    timestamp: Date.now(),
+    ...message,
+  };
+  fs.appendFileSync(filePath, JSON.stringify(timestamped) + "\n", "utf-8");
+}
+
+/**
+ * Prune an isolated job session to keep only the last N runs.
+ * A "run" is identified by a user message with string content (the job prompt).
+ * Tool results (role:user with array content) don't count as run starts.
+ */
+export function pruneJobSession(filePath: string, maxRuns: number): void {
+  if (!fs.existsSync(filePath)) return;
+
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.trimEnd().split("\n").filter(Boolean);
+
+  // Find the line index where each run starts
+  const runStarts: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      const msg = JSON.parse(lines[i]);
+      if (msg.role === "user" && typeof msg.content === "string") {
+        runStarts.push(i);
+      }
+    } catch { /* skip malformed */ }
+  }
+
+  if (runStarts.length <= maxRuns) return;
+
+  // Keep from the (total - maxRuns)th run start onward
+  const keepFrom = runStarts[runStarts.length - maxRuns];
+  const pruned = lines.slice(keepFrom);
+  fs.writeFileSync(filePath, pruned.join("\n") + "\n", "utf-8");
 }

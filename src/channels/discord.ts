@@ -152,7 +152,7 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
         await message.channel.send("📦 Session compacted — older messages summarized.");
       }
 
-      const reply = `**${agentConfig.name}:** ${result.text}`;
+      const reply = result.text;
 
       // Discord has a 2000 char message limit — split if needed.
       // First chunk is a reply (so Discord links it to the user's message),
@@ -176,7 +176,7 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
         channel: "discord", userId, agentId, agentName: agentConfig.name,
         error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
       });
-      await message.reply(`**${agentConfig.name}:** Sorry, something went wrong. Please try again.`);
+      await message.reply("Sorry, something went wrong. Please try again.");
     }
   });
 
@@ -193,7 +193,7 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
 
 class DiscordChannel implements Channel {
   readonly name = "discord";
-  private clients: Client[] = [];
+  private entries: { client: Client; agentId: string }[] = [];
 
   isConfigured(): boolean {
     const bindings = config.bindings.discord;
@@ -216,7 +216,7 @@ class DiscordChannel implements Channel {
       }
 
       const client = createClient(agentId, agentConfig);
-      this.clients.push(client);
+      this.entries.push({ client, agentId });
 
       // client.login() is async — don't await, Discord.js handles reconnection internally
       client.login(token).catch((err) => {
@@ -226,10 +226,49 @@ class DiscordChannel implements Channel {
   }
 
   async stop(): Promise<void> {
-    for (const client of this.clients) {
+    for (const { client } of this.entries) {
       client.destroy();
     }
-    this.clients = [];
+    this.entries = [];
+  }
+
+  /**
+   * Send a proactive DM to a user via Discord.
+   * Looks up the user's Discord ID from config, finds the bot bound to the
+   * given agent, fetches the Discord User object, and sends a DM.
+   *
+   * Used by the scheduler for cron/heartbeat delivery.
+   */
+  async sendMessage(userId: string, agentId: string, text: string): Promise<boolean> {
+    // Find the user's Discord ID
+    const userConfig = config.users[userId];
+    if (!userConfig) return false;
+
+    const discordId = userConfig.channelIds.discord;
+    if (!discordId) return false;
+
+    // Find the client bound to this agent
+    const entry = this.entries.find((e) => e.agentId === agentId);
+    if (!entry) return false;
+
+    const formatted = text;
+
+    try {
+      const discordUser = await entry.client.users.fetch(String(discordId));
+      // Discord has a 2000 char message limit — split if needed
+      if (formatted.length <= 2000) {
+        await discordUser.send(formatted);
+      } else {
+        await discordUser.send(formatted.slice(0, 2000));
+        for (let i = 2000; i < formatted.length; i += 2000) {
+          await discordUser.send(formatted.slice(i, i + 2000));
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error(`[discord] Failed to send proactive message to ${userId}:`, err);
+      return false;
+    }
   }
 }
 

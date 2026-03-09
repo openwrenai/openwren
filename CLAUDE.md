@@ -110,7 +110,9 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 │   │   │   ├── active.jsonl              # Current session
 │   │   │   └── 2026-02-22_18-05-43.jsonl # Archived compaction (UTC)
 │   │   ├── einstein/
-│   │   └── wizard/
+│   │   ├── wizard/
+│   │   └── jobs/                         # Isolated job sessions (scoped to user, not agent)
+│   │       └── morning-briefing.jsonl    # Full conversation history for this job
 │   └── local/                            # Scratch/dev sessions
 ├── memory/
 │   ├── atlas-user-prefs.md               # Persistent memory (agents prefix keys by convention)
@@ -118,6 +120,7 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 ├── agents/
 │   ├── atlas/
 │   │   ├── soul.md                       # Atlas personality and instructions
+│   │   ├── heartbeat.md                  # Optional heartbeat checklist (read fresh each cycle)
 │   │   └── skills/                       # Per-agent skills (highest precedence)
 │   ├── einstein/
 │   │   └── soul.md
@@ -125,6 +128,10 @@ On first run, `~/.openwren/` is created with template `openwren.json` and `.env`
 │   │   └── soul.md
 │   └── personal_trainer/
 │       └── soul.md
+├── schedules/
+│   ├── jobs.json                         # All scheduled jobs (loaded into memory on startup)
+│   └── runs/                             # Run history JSONL per job (auto-pruned)
+│       └── morning-briefing.jsonl
 ├── skills/                               # Global skills (visible to all agents)
 │   └── custom-skill/
 │       └── SKILL.md
@@ -147,10 +154,12 @@ src/
 ├── events.ts              # Typed event bus (EventEmitter singleton) — channels emit, WS subscribes
 ├── workspace.ts           # Ensures ~/.openwren/ directory structure exists
 ├── gateway/
-│   └── server.ts          # Fastify server + @fastify/websocket plugin, health check, exports app instance
+│   ├── server.ts          # Fastify server + @fastify/websocket plugin, health check, exports app instance
+│   └── routes/
+│       └── schedules.ts   # REST API for schedule CRUD (used by CLI + future WebUI)
 ├── channels/
-│   ├── index.ts           # Barrel: startChannels() + stopChannels() for graceful shutdown
-│   ├── types.ts           # Channel interface (name, isConfigured, start, stop)
+│   ├── index.ts           # Barrel: startChannels() + stopChannels() + deliverMessage() for scheduler
+│   ├── types.ts           # Channel interface (name, isConfigured, start, stop, sendMessage?)
 │   ├── telegram.ts        # Telegram adapter: TelegramChannel implements Channel
 │   ├── discord.ts         # Discord adapter: DiscordChannel implements Channel (DM-only)
 │   └── websocket.ts       # WebSocket adapter: registers /ws route, auth, bidirectional messaging
@@ -174,13 +183,21 @@ src/
 │   ├── memory.ts          # save_memory and memory_search tools
 │   ├── skills.ts          # load_skill tool (on-demand skill activation)
 │   ├── search.ts          # search_web tool (provider-agnostic, injection scan on snippets)
-│   └── fetch.ts           # fetch_url tool (readability + linkedom, markdown fast-path, injection scan)
+│   ├── fetch.ts           # fetch_url tool (readability + linkedom, markdown fast-path, injection scan)
+│   └── schedule.ts        # manage_schedule tool (create/list/update/delete/enable/disable jobs)
+├── scheduler/
+│   ├── index.ts           # Scheduler core: load jobs, croner timers, CRUD, timezone helpers
+│   ├── queue.ts           # FIFO job queue — sequential execution, one job at a time
+│   ├── runner.ts          # Execute single job: agent loop → HEARTBEAT_OK check → deliver → log
+│   ├── store.ts           # File I/O: schedules/jobs.json, run history JSONL, normalizeAtValue, generateJobId
+│   └── heartbeat.ts       # Heartbeat timer: reads heartbeat.md, active hours, HEARTBEAT_OK suppression
 ├── skills/                # Bundled skills shipped with the package
 │   ├── memory-management/ # autoload — teaches agents memory tools
 │   ├── file-operations/   # autoload — teaches agents file sandbox rules
 │   ├── web-search/        # gated on search.provider config key
 │   ├── web-fetch/         # no gate
-│   └── agent-browser/     # gated on agent-browser binary
+│   ├── agent-browser/     # gated on agent-browser binary
+│   └── scheduling/        # catalog — agent loads via load_skill when user requests scheduling
 └── scratch.ts             # Terminal REPL for dev testing
 ```
 
@@ -262,7 +279,7 @@ Three run modes:
 - **Confirmation flow** — stateful, lives in the channel layer (`telegram.ts`). `pendingConfirmations: Map<chatId, PendingCommand>`. The agent loop is not aware of this
 - **Agent name in replies** — prepend `[AgentName]` to every reply in `telegram.ts`, not in the loop. The loop is channel-agnostic
 - **Soul files** — load from `~/.openwren/agents/{agent-id}/soul.md` on every API call. Never cache — user edits take effect immediately
-- **Skills system** — two-stage loading. Stage 1: `buildSkillCatalog()` scans bundled → extra dirs → global → per-agent skill directories, parses SKILL.md frontmatter (hand-rolled, no YAML dep), runs gate checks (`requires.env`, `requires.bins`, `requires.config`, `requires.os`), returns catalog entries (name + description) and autoloaded skill bodies. Stage 2: agent calls `load_skill` tool to get the full body on demand. Skills with `autoload: true` skip the catalog and inject directly into the system prompt. Precedence: per-agent > global > extra dirs > bundled. Bundled skills live in `src/skills/`, copied to `dist/skills/` by the build script. Adding a new skill requires zero code changes — just create `~/.openwren/skills/{name}/SKILL.md`
+- **Skills system** — two-stage loading. Stage 1: `buildSkillCatalog()` scans bundled → extra dirs → global → per-agent skill directories, parses SKILL.md frontmatter (hand-rolled, no YAML dep), runs gate checks (`requires.env`, `requires.bins`, `requires.config`, `requires.os`), returns catalog entries (name + description) and autoloaded skill bodies. Stage 2: agent calls `load_skill` tool to get the full body on demand. Skills with `autoload: true` skip the catalog and inject directly into the system prompt. Precedence: per-agent > global > extra dirs > bundled. Bundled skills live in `src/skills/`, copied to `dist/skills/` by the build script. Adding a new skill requires zero code changes — just create `~/.openwren/skills/{name}/SKILL.md`. `buildSkillCatalog()` accepts a `quiet` flag — when true, all per-skill `[skills] ...` log lines are suppressed (catalog still built in full). `runner.ts` passes `quiet=true` → `runAgentLoop()` → `loadSystemPrompt()` → `buildSkillCatalog()` to avoid log spam on frequent scheduled jobs
 - **Adding a new agent** — zero code changes. Create `~/.openwren/agents/{id}/soul.md`, add dot-notation keys in `openwren.json`. If adding an agent ever requires TypeScript changes, the abstraction is wrong
 - **Channel decoupling** — agents have zero channel fields. Bindings (`config.bindings`) map channels to agents with credentials. Channel-first layout: `bindings.telegram.atlas` for O(1) lookup when a message arrives. Three concepts: agents (personality), channels (transport settings), bindings (glue)
 - **Channel interface** — each channel implements `Channel` from `channels/types.ts`. Barrel file `channels/index.ts` exports `startChannels()`. `index.ts` has no platform-specific knowledge. Adding a new channel = create adapter file + one import in the barrel
@@ -275,13 +292,19 @@ Three run modes:
 - **CLI** — `src/cli.ts` is completely standalone. It imports zero modules from the main app (no config, no events, nothing). This is deliberate — it must start fast and work even if config validation fails. It reads `~/.openwren/.env` directly (line-by-line parse) for the WS token. Dev usage: `npm run cli -- <command>`
 - **Timestamped logging** — `console.log` and `console.error` are overridden once in `index.ts` to prepend `[YYYY-MM-DD HH:MM:SS]`. Every module gets timestamps for free — no per-file changes needed
 - **Graceful shutdown** — `index.ts` registers SIGTERM/SIGINT handlers that call `stopChannels()`, close Fastify, and clean up the PID file. Triggered by `openwren stop` or Ctrl+C in foreground mode
-- **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). Same-day hotfixes use a suffix: `YYYY.M.D-1`, `YYYY.M.D-2`, etc. `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills` (bundler doesn't copy non-TS assets). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source
+- **npm packaging** — published as `openwren` on npmjs.com. Versioning: CalVer `YYYY.M.D` (date-based). Same-day hotfixes use a suffix: `YYYY.M.D-1`, `YYYY.M.D-2`, etc. `files` field in `package.json` ships only `dist/` and `README.md`. Build script: `tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills` (bundler doesn't copy non-TS assets). Users install globally (`npm install -g openwren`), run `openwren init`, never touch source. **Version bump procedure:** update `package.json` first, then run `npm install --package-lock-only` to sync `package-lock.json` without touching `node_modules` or upgrading any packages
 - **Search provider abstraction** — `src/search/` follows the same pattern as LLM providers. `SearchProvider` interface with `search(query, options)` method. `createSearchProvider()` factory reads `config.search.provider` and returns the correct implementation. Config layout: `search.provider` selects the backend, `search.{provider}.*` holds provider-specific settings. Adding a new search backend = one new file + config key, zero changes to tools or skills. Currently ships with Brave Search; future: Zenserp, Google Custom Search, SearXNG
 - **Fetch tool** — `src/tools/fetch.ts` uses `@mozilla/readability` + `linkedom` to extract article content from HTML. Readability strips navigation, ads, sidebars. Linkedom provides a lightweight DOM for readability to parse against. Output truncated to ~40K chars to prevent context window overflow. Accept header prefers `text/markdown` — if a server returns markdown, readability is skipped entirely (fast path). All fetched content runs through `scanContent()` which applies both hard and soft injection detection
 - **Prompt injection detection** — `src/tools/sanitize.ts` exports three functions. `detectInjection()` runs 8 hard patterns (ignore previous instructions, you are now a, etc.) — matched content is blocked and never reaches the LLM. `detectSuspicious()` runs 4 soft patterns (list tools/skills, reveal system prompt, respond in JSON, etc.) — matched content is logged but NOT blocked, relying on untrusted delimiters and the LLM's own judgment. `wrapUntrusted()` wraps all web content in `[BEGIN/END UNTRUSTED WEB CONTENT]` delimiters so the LLM can distinguish trusted instructions from external content. `fetch.ts` uses a `scanContent()` helper that runs both checks in sequence
 - **`list_shell_commands` tool** — returns the full whitelist of allowed shell commands with notes on restrictions (git subcommands, curl GET-only, destructive commands). The `shell_exec` tool description no longer lists commands inline — saves tokens on every API call. The agent calls `list_shell_commands` on demand when it needs to check what's allowed
 - **`requires.config` gate** — skill frontmatter supports `requires.config: [key.path]` to gate on config values. Traverses the config object using dot-notation and checks the value is set and truthy. Used by `web-search` skill to gate on `search.provider`
 - **`OPENWREN_HOME`** — env var to override workspace path. Used in both `config.ts` (main app) and `cli.ts` (standalone CLI). Defaults to `~/.openwren`. Useful for testing: `OPENWREN_HOME=~/.openwren-test openwren init`
+- **Scheduler** — `src/scheduler/` handles cron jobs and heartbeat. `index.ts` is the central coordinator: loads `schedules/jobs.json` into memory on startup (migrated from `schedules.json` automatically), creates `croner` timers for cron jobs, `setInterval` for intervals, `setTimeout` for one-shots. FIFO `queue.ts` ensures sequential execution (one job at a time, prevents API rate limit issues). `runner.ts` calls the agent loop, checks for HEARTBEAT_OK, delivers via channel `sendMessage()`, logs to run history JSONL. Three schedule types: `cron`, `every` (m/h/d units), `at` (one-shot). All times interpreted in `config.timezone` — never `new Date()` for timezone logic, always croner or `Intl.DateTimeFormat`. `normalizeAtValue()` strips timezone suffixes from `at` inputs. Error handling: transient errors get exponential backoff retry (30s, 1m, 5m), permanent errors auto-disable the job
+- **Job isolation** — jobs have an `isolated` boolean. `isolated: true` routes the session to `sessions/{userId}/jobs/{jobId}.jsonl` (scoped to user, not agent — reassigning to a different agent preserves history). `isolated: false` uses the main session (`active.jsonl`). Isolated sessions skip idle/daily resets and compaction; pruned by `scheduler.runHistory.sessionRetention` (default 50 runs). Non-isolated jobs prefix the prompt with `[job:jobId]` and the stored response with `[Job Name]` for traceability. All jobs prepend `[Job Name]` to channel delivery regardless of isolation mode
+- **Heartbeat** — `src/scheduler/heartbeat.ts`. Periodic check-in where agents read `~/.openwren/agents/{id}/heartbeat.md` and respond with either a message or `HEARTBEAT_OK` (suppressed, not delivered). Runs in main session (full conversation context). Active hours gating via `heartbeat.activeHours` config. File read fresh each cycle (never cached)
+- **Channel `sendMessage()`** — optional method on `Channel` interface for proactive delivery (scheduler needs to send messages without an incoming message). Implemented in `telegram.ts` (`bot.api.sendMessage`) and `discord.ts` (`user.send`). `channels/index.ts` exports `deliverMessage()` convenience function
+- **Schedule REST API** — `src/gateway/routes/schedules.ts`. Thin layer over scheduler CRUD, auth via Bearer token (same as WS). Used by CLI (`openwren schedule`) and future WebUI. Endpoints: GET/POST/PATCH/DELETE `/api/schedules`, plus `/enable`, `/disable`, `/run`, `/history` per job
+- **`manage_schedule` tool** — `src/tools/schedule.ts`. Agent tool for creating/listing/updating/deleting scheduled jobs. Tool description is intentionally minimal — tells the agent to `load_skill("scheduling")` for full instructions and cron examples, saving tokens on every API call. The scheduling skill (catalog, not autoloaded) contains confirmation instructions and schedule format reference. Actions: create, list, update, delete, enable, disable
 
 ---
 
