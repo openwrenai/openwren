@@ -34,6 +34,20 @@ Core dependencies: `@anthropic-ai/sdk`, `grammy`, `discord.js`, `fastify`, `@fas
 
 ---
 
+## Build
+
+Project uses **tsup** (esbuild-based) for compilation, not raw `tsc`. Package type is `"module"` (ESM).
+
+| Command | What it does |
+|---|---|
+| `npm run build` | `tsup` → copies `src/templates/` and `src/skills/` into `dist/` (runtime assets) |
+| `npm run typecheck` | `tsc` (type-check only, `noEmit: true`) |
+| `npm run dev` | `tsx src/index.ts` — runs directly, no build step |
+| `npm run cli -- <cmd>` | `tsx src/cli.ts` — CLI commands during dev |
+
+> **Important:** Run `npx tsc --noEmit` (no file args) for type-checking — passing individual files bypasses `tsconfig.json` settings.
+---
+
 ## Architecture
 
 ```

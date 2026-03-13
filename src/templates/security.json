@@ -1,0 +1,39 @@
+{
+  // Global mode: "deny" | "allowlist" | "full"
+  // deny = all shell disabled, allowlist = tiered with confirmation, full = no restrictions
+  "mode": "allowlist",
+
+  // Commands that run silently — no confirmation needed
+  "tiers.safe": ["ls", "find", "cat", "head", "tail", "grep", "wc", "sort", "uniq", "jq", "df", "du", "ps", "lsof", "date", "echo", "which"],
+
+  // Commands that require user confirmation (or pre-approval for scheduled jobs)
+  "tiers.privileged": ["git", "npm", "npx", "node", "curl", "ping", "mv", "cp", "mkdir", "touch", "agent-browser"],
+
+  // Subcommand safety rails — limits which subcommands are allowed per binary.
+  // Remove a line to allow all subcommands for that binary (git * / npm *).
+  // You can add rails for any binary: "subcommands.curl": ["-o", "--output"]
+  "subcommands.git": ["add", "branch", "checkout", "clone", "commit", "diff", "fetch", "log", "merge", "pull", "push", "remote", "stash", "status", "tag"],
+  "subcommands.npm": ["ci", "info", "install", "list", "ls", "outdated", "run", "test", "view"],
+
+  // Paths agents cannot write to (glob patterns, relative to workspace root)
+  "paths.protectedWrite": ["agents/*/soul.md", "openwren.json", "security.json", ".env", "exec-approvals.json"],
+
+  // Paths agents cannot read (glob patterns, relative to workspace root)
+  "paths.protectedRead": [".env"],
+
+  // Paths outside workspace that agents can read (absolute paths)
+  // "paths.allowReadOutside": ["/var/log"],
+
+  // Per-agent overrides
+  // "agents.einstein.mode": "deny",
+  //
+  // Per-agent protectedWrite override — agent uses this list instead of global paths.protectedWrite
+  // Empty [] = no write restrictions for this agent. Omit to inherit global list.
+  // "agents.wizard.paths.protectedWrite": [],
+
+  // Scheduled jobs: require commands to be pre-approved in exec-approvals.json
+  "scheduler.requirePreApproval": true,
+
+  // Seconds to wait for user confirmation before auto-cancelling (0 = no timeout)
+  "approvalTimeout": 300,
+}

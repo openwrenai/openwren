@@ -21,327 +21,305 @@ Add Discord as a second messaging channel. Each bot hardwired to one agent — n
 ### Phase 8 — Skills System
 ### Phase 9 — Web Research (Search + Fetch + Browser)
 Add web research tools: search, fetch, and browser. Search uses a provider abstraction (like LLM providers) so backends are swappable via config. Fetch and browser are standalone tools.
+### Phase 9.1 — Cron / Scheduled Tasks + Heartbeat
 
 ## Left to do Phases
 
-### Phase 9.1 — Cron / Scheduled Tasks + Heartbeat
+### Phase 9.2 — Shell Security & Confirmation System
 
-Proactive agent messaging: scheduled jobs (cron, interval, one-shot) and periodic heartbeat check-ins. Jobs are agent-bound, not channel-bound. All three creation paths (agent tool, CLI, HTTP API) write to the same `schedules.json` file. Heartbeat is a separate, simpler mechanism driven by a per-agent markdown checklist.
+The current shell system has security gaps: only 4 commands require confirmation, `git push`/`npm`/`curl` run freely, scheduled jobs bypass confirmation entirely, agents can overwrite their own soul files, and the confirmation flow is duplicated across all three channel adapters.
 
-**Research reference:** `openclaw-cron-research.md` in project root — documents OpenClaw's two-tier scheduling (heartbeat + cron), their design decisions, and what we adopted/adapted/avoided.
+Phase 9.2 introduces a dedicated `security.json` config file with three execution modes, tiered command classification, per-agent mode overrides, filesystem path protection, shell argument scanning for protected paths, and a shared confirmation module.
 
-#### Architecture Overview
+**Three config files, three concerns:**
+- `openwren.json` — app config (agents, bindings, models, timezone)
+- `security.json` — execution policy (shell tiers, path protection, per-agent overrides)
+- `exec-approvals.json` — runtime approval state (what the user has said "always" to)
 
-```
-src/scheduler/
-├── index.ts          # Scheduler class: load jobs on startup, create/manage croner timers,
-│                     #   CRUD operations (createJob, listJobs, updateJob, deleteJob),
-│                     #   in-memory state + file persistence, heartbeat timer management
-├── queue.ts          # FIFO job queue: enqueue due jobs, process sequentially (one at a time),
-│                     #   prevents parallel LLM calls and rate limit issues
-├── runner.ts         # Execute a single job: resolve agent, create session (isolated or main),
-│                     #   call agent loop, check HEARTBEAT_OK, deliver to channel, log run history
-├── store.ts          # File I/O: read/write schedules.json, append/prune run history JSONL,
-│                     #   generateJobId with conflict resolution (slugify + dedupe)
-└── heartbeat.ts      # Heartbeat timer: reads heartbeat.md each cycle, injects into agent turn,
-                      #   HEARTBEAT_OK suppression, active hours gating
-```
+---
 
-```
-src/gateway/routes/
-└── schedules.ts      # REST API: GET/POST/PATCH/DELETE /api/schedules — thin layer over
-                      #   scheduler CRUD functions, used by CLI and future WebUI
-```
+#### Step 1: Create `src/templates/security.json` — default security template
 
-**Three access paths, one core:**
-- Agent tool (`manage_schedule`) → calls scheduler functions directly (in-process)
-- CLI (`openwren schedule <cmd>`) → HTTP requests to REST API on running daemon
-- WebUI (future) → same REST API endpoints
-
-#### Storage Layout
-
-```
-~/.openwren/
-├── schedules.json                    # All jobs — single JSON file, loaded into memory on startup
-├── schedules/
-│   └── runs/
-│       ├── morning-briefing.jsonl    # Run history per job (append-only, auto-pruned to 500 lines)
-│       └── water-reminder.jsonl
-├── agents/
-│   ├── atlas/
-│   │   ├── soul.md
-│   │   └── heartbeat.md             # Heartbeat checklist (read fresh each cycle, never cached)
-│   ├── coach/
-│   │   └── soul.md
-```
-
-**`schedules.json` format** — keyed by jobId (slugified from name, auto-deduped on conflict):
-```json
-{
-  "morning-briefing": {
-    "name": "Morning briefing",
-    "agent": "atlas",
-    "schedule": { "cron": "0 8 * * 1-5" },
-    "prompt": "Check my memory files and give me a morning status update.",
-    "channel": "telegram",
-    "user": "owner",
-    "isolated": true,
-    "enabled": true,
-    "deleteAfterRun": false,
-    "createdBy": "owner",
-    "createdAt": "2026-03-08T10:00:00Z"
-  }
-}
-```
-
-**Three schedule types:**
-- `{ "cron": "0 8 * * 1-5" }` — full 5-field cron expression (parsed by `croner` library). Active hours baked into the expression itself (e.g. `0 8-22/2 * * *` for every 2h between 8am–10pm)
-- `{ "every": "2h" }` — simple interval. Supported units: `m` (minutes), `h` (hours), `d` (days). Examples: `"30m"`, `"2h"`, `"1d"`. No weeks/months/years — use cron expressions for those (e.g. `0 9 * * 1` for weekly, `0 10 1 * *` for monthly). Optional `activeHours`: `{ "every": "2h", "activeHours": { "start": "08:00", "end": "22:00" } }`. If outside active hours, skip and wait for next interval
-- `{ "at": "2026-03-15T09:00:00" }` — one-shot, fires once. Always interpreted in the user's configured `timezone` from openwren.json. **Timezone suffix stripping:** if the input contains `Z` or `+HH:MM` suffix (from CLI input, agent tool, or manual JSON edit), strip it silently and store bare `"YYYY-MM-DDTHH:MM:SS"`. This prevents timezone misinterpretation — there is no reason for a user to specify a suffix since the timezone comes from config. **Implementation note:** do NOT use `new Date()` to interpret `at` values — it uses the server's system timezone, not the user's configured timezone. Use croner with explicit `{ timezone: config.timezone }` or `Intl.DateTimeFormat` to convert to UTC ms. This ensures correct behavior even when server timezone ≠ user's configured timezone (e.g. server in UTC, user config says `Europe/Stockholm`). Auto-disables after run (`enabled: false`). Optional `"deleteAfterRun": true` to remove entirely
-
-**Run history JSONL** — `schedules/runs/{jobId}.jsonl`:
-```jsonl
-{"ts":1709801400000,"status":"ok","durationMs":12300,"tokens":850,"delivered":true}
-{"ts":1709816000000,"status":"ok","durationMs":5100,"tokens":430,"delivered":false,"suppressed":"HEARTBEAT_OK"}
-{"ts":1709823200000,"status":"error","error":"rate_limit","errorType":"transient","durationMs":0,"delivered":false}
-{"ts":1709823230000,"status":"ok","durationMs":15000,"tokens":900,"delivered":true,"retry":1}
-```
-
-Auto-pruned: keep last 500 lines (configurable via `scheduler.runHistory.maxLines`).
-
-**`durationMs`** — wall-clock time around the agent loop call (`Date.now()` before/after). Includes network latency, LLM thinking, tool calls.
-**`tokens`** — rough estimate using character count ÷ 4 (same approach as session compaction). Good enough for Phase 9.1. Upgrade to exact Anthropic API `usage` field tracking planned for Phase 12.
-
-#### Session Isolation
-
-- **Isolated** (default for cron jobs, `"isolated": true`) — job gets its own session file: `sessions/{userId}/{agentId}/cron-{jobId}.jsonl`. No conversation history, fresh start with soul file + job prompt. Agent can still read memory files via tools. Each run appends to the same session file (so the agent can reference previous runs of the same job)
-- **Main session** (`"isolated": false`, always used by heartbeat) — job runs inside `sessions/{userId}/{agentId}/active.jsonl`, same as user conversations. Agent has full context of prior chat. Used when the job needs awareness of what the user has been discussing
-
-#### Config Keys (openwren.json)
-
-Only global scheduler and heartbeat settings. Individual jobs live in `schedules.json`, not here.
+Generated by `openwren init`, placed at `~/.openwren/security.json`. JSON5 with dot-notation keys.
 
 ```json5
 {
-  // Heartbeat
-  "heartbeat.enabled": true,
-  "heartbeat.every": "30m",
-  "heartbeat.activeHours.start": "08:00",
-  "heartbeat.activeHours.end": "22:00",
+  // Global mode: "deny" | "allowlist" | "full"
+  // deny = all shell disabled, allowlist = tiered with confirmation, full = no restrictions
+  "mode": "allowlist",
 
-  // Scheduler globals
-  "scheduler.enabled": true,
-  "scheduler.runHistory.maxLines": 500,
+  // Commands that run silently — no confirmation needed
+  "tiers.safe": ["ls", "find", "cat", "head", "tail", "grep", "wc", "sort", "uniq", "jq", "df", "du", "ps", "lsof", "date", "echo", "which"],
+
+  // Commands that require user confirmation (or pre-approval for scheduled jobs)
+  "tiers.privileged": ["git", "npm", "npx", "node", "curl", "ping", "mv", "cp", "mkdir", "touch", "agent-browser"],
+
+  // Subcommand safety rails — prevent accidental misuse, not security
+  // (agent could bypass via scripts anyway; these catch mistakes, not malice)
+  "subcommands.git": ["status", "log", "diff", "pull", "add", "commit", "push"],
+  "subcommands.npm": ["run"],
+
+  // Paths agents cannot write to (glob patterns, relative to workspace root)
+  "paths.protectedWrite": ["agents/*/soul.md", "openwren.json", "security.json", ".env", "exec-approvals.json"],
+
+  // Paths agents cannot read (glob patterns, relative to workspace root)
+  "paths.protectedRead": [".env"],
+
+  // Paths outside workspace that agents can read (absolute paths)
+  // "paths.allowReadOutside": ["/var/log"],
+
+  // Per-agent mode override (only option is mode — no per-agent denied lists)
+  // "agents.einstein.mode": "deny",
+
+  // Scheduled jobs: require commands to be pre-approved in exec-approvals.json
+  "scheduler.requirePreApproval": true,
+
+  // Seconds to wait for user confirmation before auto-cancelling (0 = no timeout)
+  "approvalTimeout": 300,
 }
 ```
 
-#### Heartbeat
+- [x] Create `src/templates/security.json` with the above defaults and comments
 
-Periodic check-in where the agent wakes up, reads `~/.openwren/agents/{agentId}/heartbeat.md`, processes the checklist in a single turn within the main session, and either messages the user or stays silent.
+---
 
-- Config: `heartbeat.enabled`, `heartbeat.every` (interval), `heartbeat.activeHours` (start/end)
-- File: `~/.openwren/agents/{agentId}/heartbeat.md` — user-editable checklist, read fresh each cycle
-- Runs in main session (full conversation context)
-- HEARTBEAT_OK suppression: agent responds with exactly `HEARTBEAT_OK` if nothing to report → our code swallows it, no message delivered to user
-- Active hours: heartbeat skipped if current time is outside configured window
-- Per-agent: each agent can have its own `heartbeat.md` with different concerns. Agents without a `heartbeat.md` file are silently skipped
+#### Step 2: Create `src/security.ts` — security config loader
 
-#### HEARTBEAT_OK Flow
+New module, mirrors `config.ts` pattern. Owns loading, parsing, caching, and all security lookups.
 
-```
-1. Timer fires (every 30m)
-2. Check active hours → if outside window, skip
-3. Read ~/.openwren/agents/{agentId}/heartbeat.md → if missing, skip
-4. Inject checklist content into agent turn (main session)
-5. Agent thinks, checks memory/files, processes checklist
-6. Agent responds:
-   ├── "HEARTBEAT_OK" → swallow response, don't deliver, log as suppressed
-   └── Anything else  → deliver to user's bound channel
-7. Log run to heartbeat run history
-```
+- [x] Define `SecurityConfig` interface — typed representation of all security.json fields
+- [x] `loadSecurity()` — reads `~/.openwren/security.json`, parses JSON5, applies dot-notation `deepSet`, merges over hardcoded defaults (same pattern as `loadConfig`)
+- [x] `getSecurity()` — returns cached config, lazy-loads on first call
+- [x] `reloadSecurity()` — clears cache, forces re-read from disk
+- [x] `getAgentMode(agentId)` — resolves mode: `agents.{id}.mode` → global `mode` → hardcoded `"allowlist"`
+- [x] `classifyCommand(bin, agentId)` → `"safe" | "privileged" | "blocked"`:
+  1. Agent mode `deny` → `"blocked"`
+  2. Agent mode `full` → `"safe"` (skip all checks)
+  3. `tiers.safe` contains bin → `"safe"`
+  4. `tiers.privileged` contains bin → `"privileged"`
+  5. Not in any tier → `"blocked"`
+- [x] `checkArgsForProtectedPaths(args)` — scans shell command arguments against `paths.protectedWrite` and `paths.protectedRead` glob patterns. Returns the matching protected path or null. Catches obvious cases like `cat .env`, `grep foo .env`, `cp soul.md /tmp/`. Not bulletproof (can't catch `cat $(echo .env)`) but prevents accidental access through shell commands
+- [x] `validateSubcommand(bin, args)` — reads `subcommands.*` from config, returns error string or null
+- [x] `isProtectedWrite(filePath)` — glob-matches against `paths.protectedWrite`
+- [x] `isProtectedRead(filePath)` — glob-matches against `paths.protectedRead`
+- [x] `isAllowedOutsidePath(filePath)` — checks against `paths.allowReadOutside`
+- [x] Startup logging — on first load, log security summary:
+  ```
+  [security] Mode: allowlist
+  [security] Safe: 17 commands | Privileged: 13 commands
+  [security] atlas: inherits allowlist
+  [security] einstein: deny (shell disabled)
+  ```
 
-#### Error Handling
+---
 
-- **Transient errors** (rate limit, timeout, 5xx) → exponential backoff retry (30s, 1m, 5m), job stays enabled
-- **Permanent errors** (auth failure, validation) → job auto-disabled, logged
-- **One-shot (`at`) jobs** → up to 3 retries on transient errors, then disable
-- **Recurring jobs** → backoff before next scheduled run, reset backoff after success
+#### Step 3: Rewrite `src/tools/shell.ts` — remove all hardcoded security
 
-#### Job Lifecycle
+Everything moves to `security.json` via `getSecurity()`. Shell.ts becomes a pure executor.
 
-```
-              ┌──────────┐
-  create ────►│ enabled  │
-              └────┬─────┘
-                   │
-      ┌────────────┼─────────────┐
-      ▼            ▼             ▼
- user/agent     one-shot      user/agent
- disables      completes      deletes
-      │            │             │
-      ▼            ▼             ▼
- ┌──────────┐  ┌──────────┐  removed from
- │ disabled │  │ disabled │  schedules.json
- └────┬─────┘  │(or deleted│  + run history
-      │        │if delete  │    deleted
-      ▼        │AfterRun)  │
- user/agent    └───────────┘
- deletes
-      │
-      ▼
- removed entirely
-```
+- [x] Delete `ALLOWED_COMMANDS` set
+- [x] Delete `DESTRUCTIVE_COMMANDS` set and its export
+- [x] Delete `CURL_BLOCKED_FLAGS` regex
+- [x] Delete hardcoded subcommand checks (git allowedGit set, npm `run` check, curl flag check)
+- [x] Rewrite `validateCommand(command, agentId)` — calls `classifyCommand(bin, agentId)` for tier check, calls `validateSubcommand(bin, args)` for subcommand restrictions
+- [x] Add protected path argument scan — after validation passes, call `checkArgsForProtectedPaths(args)`. If a protected path is found in the arguments, block with: `[shell] Command references protected path: .env`
+- [x] `executeShell(command, agentId)` — now takes agentId, passes to validateCommand
+- [x] Rewrite `listShellCommands(agentId)` — reads from `getSecurity()`, reflects agent's actual permissions:
+  - Mode `deny`: "Shell access is disabled for this agent."
+  - Mode `full`: "Unrestricted shell access. All commands allowed."
+  - Mode `allowlist`: show safe/privileged lists, subcommand restrictions, which binaries are already approved
 
-#### Agent Tool — `manage_schedule`
+---
 
-Single tool with actions: `create`, `list`, `update`, `delete`, `enable`, `disable`.
+#### Step 4: Rewrite `src/tools/index.ts` — three-tier execution flow
 
-For `create` — required: `name`, `schedule`, `prompt`. Optional: `agent` (defaults to current agent), `channel` (defaults to current channel), `isolated` (default true), `deleteAfterRun` (default false), `user` (default current user).
+Replace the current `DESTRUCTIVE_COMMANDS.has(bin)` block with full tier-based logic.
 
-Tool description instructs the agent: "Before creating a schedule, confirm with the user: the schedule timing, which agent should run it, and what the prompt should say. Do not create a schedule without explicit user confirmation of these details."
+- [x] Remove `DESTRUCTIVE_COMMANDS` import from shell.ts
+- [x] Add imports: `classifyCommand` from `security.ts`, `parseCommand` from `shell.ts`
+- [x] `shell_exec` case — new flow:
+  1. `classifyCommand(bin, agentId)` → `"blocked"` → reject with error
+  2. → `"safe"` → execute directly
+  3. → `"privileged"`:
+     - `isApproved(agentId, bin)` → auto-approved, execute
+     - `confirm` callback exists → prompt user, handle yes/no/always
+     - No `confirm` (scheduled job) → reject: "requires pre-approval"
+  4. `permanentlyApprove(agentId, bin)` — stores binary name, not full command
+- [x] `executeShell` call now passes `agentId`
+- [x] `listShellCommands` call now passes `agentId`
 
-#### CLI Commands
+---
 
-```
-openwren schedule list                     # List all jobs (id, name, schedule, enabled, last run, next run)
-openwren schedule create                   # Interactive: prompts for name, schedule, agent, prompt, channel
-openwren schedule enable <jobId>           # Enable a disabled job
-openwren schedule disable <jobId>          # Disable a job (keeps in file)
-openwren schedule delete <jobId>           # Remove job + run history
-openwren schedule history <jobId>          # Show recent runs for a job
-openwren schedule run <jobId>              # Trigger a job immediately (bypass schedule)
-```
+#### Step 5: Rewrite `src/tools/approvals.ts` — binary-level storage
 
-CLI sends HTTP requests to REST API on the running daemon (same pattern as `openwren status` uses WS gateway).
+No migration from old format — clean slate.
 
-#### Dependencies
+- [x] Delete old migration code (the `Array.isArray` block)
+- [x] `isApproved(agentId, bin)` — checks binary name in agent's approved list
+- [x] `permanentlyApprove(agentId, bin)` — stores binary name, deduplicates
+- [x] Log: `[approvals] Permanently approved "git" for atlas`
 
-- `croner` — zero-dep cron expression parser + scheduler. ESM native, timezone support, 5/6-field expressions. Handles `cron` schedule type. For `every` and `at` types, we use simple `setTimeout`/`setInterval` with our own parsing
-
-#### Implementation Tasks
-
-**Step 1: Scaffold + Storage**
-- [x] Create `src/scheduler/` directory
-- [x] `store.ts` — read/write `schedules.json`, `generateJobId()` with slugify + conflict resolution, append run history JSONL, prune run history by max lines. Include `normalizeAtValue()` — strips timezone suffixes (Z, +HH:MM, -HH:MM) from `at` schedule values on all input paths (agent tool, CLI, REST API). All three creation paths call this before storing
-- [x] Add `schedules/` and `schedules/runs/` to workspace directory creation in `workspace.ts`
-- [x] Add `scheduler.enabled`, `scheduler.runHistory.maxLines`, `heartbeat.*` keys to `defaultConfig` in `config.ts`
-
-**Step 2: Queue + Runner**
-- [x] `queue.ts` — FIFO queue class: `enqueue(job)`, sequential `processNext()`, one job at a time, event or callback on completion
-- [x] `runner.ts` — execute a single job: resolve agent config, determine session path (isolated vs main), call agent loop with job prompt as user message, return agent response
-- [x] Handle HEARTBEAT_OK suppression in runner (string check on response, skip delivery)
-- [x] Delivery: add `sendMessage()` to Channel interface, implement in TelegramChannel and DiscordChannel, add `deliverMessage()` to channels barrel
-
-**Step 3: Scheduler Core**
-- [x] Install `croner` dependency
-- [x] `index.ts` — Scheduler class: `start()` loads `schedules.json`, creates `Cron` timer per enabled job, `stop()` cancels all timers
-- [x] Handle three schedule types: `cron` → `new Cron(expr, ...)`, `every` → `setInterval` with active hours check, `at` → `setTimeout` to target date
-- [x] On timer fire: enqueue job into the queue
-- [x] One-shot (`at`) jobs: auto-disable after successful run, optionally delete if `deleteAfterRun`
-- [x] CRUD operations: `createJob()`, `updateJob()`, `deleteJob()`, `enableJob()`, `disableJob()` — update in-memory state, persist to file, create/cancel timers as needed
-- [x] `listJobs()` — return all jobs with next run time (croner provides `.nextRun()`)
-- [x] Timezone: pass `config.timezone` to croner for all `cron` type jobs. For `at` type: strip any timezone suffix (Z, +HH:MM) from input, interpret bare datetime string in `config.timezone` using croner or Intl.DateTimeFormat — never `new Date()`. For `every` with `activeHours`: check current time in `config.timezone` before firing. Comment all timezone-related functions clearly explaining why `new Date()` is avoided
-
-**Step 4: Heartbeat**
-- [x] `heartbeat.ts` — heartbeat timer using `setInterval` based on `heartbeat.every` config
-- [x] On each cycle: check active hours → read `heartbeat.md` for each agent that has one → enqueue as a main-session job with the checklist as the prompt
-- [x] Instruct agent via system message prefix: "If nothing is worth reporting, respond with exactly HEARTBEAT_OK"
-- [x] Start/stop heartbeat timer alongside scheduler in `index.ts`
-
-**Step 5: Error Handling + Retry**
-- [x] Classify errors as transient (rate limit, timeout, 5xx) or permanent (auth, validation)
-- [x] Transient: exponential backoff retry (30s, 1m, 5m) — re-enqueue with delay
-- [x] Permanent: auto-disable job, log error
-- [x] One-shot: max 3 retries, then disable
-- [x] Log all runs (success + failure) to run history JSONL
-
-**Step 6: Agent Tool**
-- [x] `src/tools/schedule.ts` — `manage_schedule` tool definition + executor
-- [x] Actions: `create`, `list`, `update`, `delete`, `enable`, `disable`
-- [x] Tool description: instruct agent to gather required details before creating
-- [x] Register in `src/tools/index.ts`
-
-**Step 7: REST API**
-- [x] `src/gateway/routes/schedules.ts` — REST endpoints on Fastify
-- [x] `GET /api/schedules` — list all jobs with status/next run
-- [x] `POST /api/schedules` — create job (validate required fields)
-- [x] `PATCH /api/schedules/:id` — update job fields
-- [x] `DELETE /api/schedules/:id` — delete job + run history
-- [x] `POST /api/schedules/:id/run` — trigger immediate execution
-- [x] `POST /api/schedules/:id/enable` and `/disable`
-- [x] `GET /api/schedules/:id/history` — run history for a job
-- [x] Register routes in `gateway/server.ts`
-
-**Step 8: CLI Schedule Commands**
-- [x] Add `schedule` subcommand to `src/cli.ts`
-- [x] `openwren schedule list` — GET /api/schedules, format as table
-- [x] `openwren schedule create` — interactive prompts (name, agent, schedule, prompt, channel), POST /api/schedules
-- [x] `openwren schedule enable/disable <id>` — POST to enable/disable endpoints
-- [x] `openwren schedule delete <id>` — DELETE /api/schedules/:id
-- [x] `openwren schedule history <id>` — GET /api/schedules/:id/history, format as table
-- [x] `openwren schedule run <id>` — POST /api/schedules/:id/run
-
-**Step 9: Integration + Boot**
-- [x] Start scheduler in `src/index.ts` after channels are started (scheduler needs channels for delivery)
-- [x] Stop scheduler in graceful shutdown (cancel all timers before closing channels)
-- [x] Add scheduler status to `openwren status` output (enabled, job count, next run)
-- [x] Emit scheduler events on event bus: `schedule_run`, `schedule_error` (for WS clients and future WebUI)
-
-**Step 10: Skill + Documentation**
-- [x] Create bundled skill `src/skills/scheduling/SKILL.md` — teaches agents how to use `manage_schedule` tool effectively, with examples of cron expressions, best practices for gathering requirements
-- [x] Update `CLAUDE.md` with scheduler architecture notes
-- [x] Update `README.md` with scheduled tasks section
-- [x] Update Phase 10 (WebUI) todo already references scheduler REST API for schedule management UI
-
-**Step 11: Testing**
-- [x] Manual test: create job via CLI, verify it fires at scheduled time
-- [x] Manual test: create job via agent conversation, verify agent asks for details
-- [x] Manual test: heartbeat with `heartbeat.md`, verify HEARTBEAT_OK suppression
-- [x] Manual test: one-shot job fires and auto-disables
-- [x] Manual test: disable/enable/delete jobs via CLI
-- [x] Manual test: `openwren schedule run <id>` triggers immediate execution
-- [x] Manual test: error handling — stop Anthropic API, verify transient retry and logging
-- [x] Verify run history JSONL is written and auto-pruned
-
-### Phase 9.2 — Shell Approval Hardening
-
-The current shell approval system has security gaps: only 4 commands (`mv`, `cp`, `mkdir`, `touch`) require user confirmation, while potentially dangerous commands (`git`, `npm`, `node`, `sed`, `curl`) run freely. Scheduled jobs bypass confirmation entirely since the `confirm` callback comes from channels and is unavailable in the scheduler's runner.
-
-#### Tiered Whitelist
-
-Split the existing flat whitelist into two tiers:
-
-**Safe commands** — read-only or harmless, run freely everywhere (interactive + scheduled):
-`ls`, `find`, `cat`, `head`, `tail`, `grep`, `wc`, `sort`, `uniq`, `jq`, `date`, `echo`, `which`, `ping`, `df`, `du`, `ps`, `lsof`
-
-**Privileged commands** — can modify state, require confirmation:
-`git`, `npm`, `npx`, `node`, `curl`, `sed`, `awk`, `mv`, `cp`, `mkdir`, `touch`, `agent-browser`
-
-#### Approval Model
-
-- **Interactive mode** (Telegram/Discord/WS): privileged commands prompt yes/always/no (expanding current behavior from 4 commands to all privileged ones)
-- **Scheduled jobs**: privileged commands check `exec-approvals.json` only — if not pre-approved, hard block (return error to agent, log it). No async confirmation dance
-- **`exec-approvals.json`**: change from exact command strings to **binary-level** approval. Approving `git status` once with "always" approves `git` for that agent — all subcommands. Per-agent scoping preserved
-
-#### exec-approvals.json Format (binary-level)
-
+`exec-approvals.json` format:
 ```json
 {
-  "atlas": ["git", "curl", "npm"],
-  "einstein": ["git"]
+  "atlas": ["git", "npm", "curl"],
+  "wizard": ["git"]
 }
 ```
 
-#### Implementation Tasks
+---
 
-- [ ] Rename `DESTRUCTIVE_COMMANDS` → `PRIVILEGED_COMMANDS` in `shell.ts`, expand the set
-- [ ] Update `approvals.ts` — `isApproved()` checks binary name (not full command string), `permanentlyApprove()` stores binary name. Add migration from old exact-command format
-- [ ] Update `tools/index.ts` — apply privileged check to the expanded set
-- [ ] Update `runner.ts` or `loop.ts` — when no `confirm` callback is available (scheduled jobs), check approvals for privileged commands, hard block if not approved
-- [ ] Update `list_shell_commands` tool output — indicate which commands are privileged and require approval
-- [ ] Manual test: interactive approval flow with expanded privileged set
-- [ ] Manual test: scheduled job blocked from running unapproved privileged command
-- [ ] Manual test: scheduled job runs pre-approved privileged command successfully
+#### Step 6: Add protected paths to `src/tools/filesystem.ts`
+
+Enforce path protection from `security.json` on all file operations. Also add per-agent `protectedWrite` override to `security.ts` — an agent can have its own write-protection list (e.g. empty `[]` to unlock all writes, or a shorter list to unlock soul.md writes) without needing `full` mode.
+
+**6a. Per-agent `protectedWrite` override in `src/security.ts`:**
+- [x] Update `SecurityConfig` interface — agent override type gets optional `paths?: { protectedWrite?: string[] }`
+- [x] Update `defaultSecurity.agents` type to match
+- [x] Update `isProtectedWrite(filePath, agentId)` — check agent-level `protectedWrite` first; if not set, fall back to global `paths.protectedWrite`
+- [x] Update startup logging — log when an agent has custom path overrides
+
+**6b. Update `src/templates/security.json`:**
+- [x] Add commented example showing per-agent `protectedWrite` override:
+  ```json5
+  // Per-agent protectedWrite override — agent uses this list instead of global paths.protectedWrite
+  // Empty [] = no write restrictions for this agent. Omit to inherit global list.
+  // "agents.wizard.paths.protectedWrite": [],
+  ```
+
+**6c. Enforce path protection in `src/tools/filesystem.ts`:**
+- [x] `writeFile()` — before any write, call `isProtectedWrite(filePath, agentId)`. If match: hard block, return error. Skip confirmation — not overridable
+- [x] `readFile()` — before any read, call `isProtectedRead(filePath)`. If match: hard block, return error
+- [x] Outside-workspace reads — currently `safePath()` blocks everything outside `~/.openwren/`. Add: if path is outside workspace, check `isAllowedOutsidePath(filePath)`. If listed in `paths.allowReadOutside`, allow. Otherwise block as before
+- [x] Update `writeFile` and `readFile` signatures to accept `agentId` parameter
+- [x] Update callers in `src/tools/index.ts` — pass `agentId` to `writeFile` and `readFile`
+
+---
+
+#### Step 7: Add approval timeout
+
+Prevent the agent loop from hanging forever when user doesn't respond.
+
+- [x] In `tools/index.ts`, wrap `confirm()` call with configurable timeout from `getSecurity().approvalTimeout`
+- [x] Use `Promise.race([confirm(command), timeoutPromise])` — timeout resolves to `"timeout"` (cancelled)
+- [x] Agent gets: `[shell] Command timed out waiting for approval. Cancelled.`
+- [x] Timeout also applies to `write_file` confirmation — `[write_file] Timed out waiting for approval. Cancelled.`
+- [x] `approvalTimeout: 0` = no timeout (wait forever, current behavior)
+
+---
+
+#### Step 8: Extract confirmation flow to `src/channels/confirm.ts`
+
+Currently duplicated across telegram.ts, discord.ts, and websocket.ts — identical yes/always/no parsing logic.
+
+- [x] Create `src/channels/confirm.ts` with shared types and logic:
+  - `parseConfirmAnswer(text)` — returns boolean | "always" | null
+  - `CONFIRM_HELP` — shared help text constant
+  - `handleConfirmResponse(chatKey, text)` — parses yes/no/always, resolves promise, returns answer or "help" or null
+  - `createConfirmFn(chatKey, agentName, sendPrompt)` — returns a `ConfirmFn` for `executeTool`
+- [x] Refactor `telegram.ts` — removed PendingCommand interface + 3 exported functions + inline map. Uses `handleConfirmResponse("tg:${chatId}")` and `createConfirmFn`
+- [x] Refactor `discord.ts` — removed PendingCommand interface + inline map. Same shared module usage with `dc:${senderId}` keys
+- [x] Refactor `websocket.ts` — kept nonce-based transport (no text parsing needed), added comment explaining why it manages its own pending map
+
+---
+
+#### Step 9: Enhance confirmation UX — show reason
+
+- [x] Add optional `reason` field to `shell_exec` tool input schema
+- [x] Update tool description — instruct model to always provide reason for privileged commands
+- [x] Update `ConfirmFn` signature: `(command: string, reason?: string) => Promise<boolean | "always">`
+- [x] `confirmWithTimeout` passes reason through
+- [x] `createConfirmFn` in confirm.ts displays reason line when provided
+- [x] WebSocket confirm callback passes reason in `confirm_request` payload
+- [x] Confirmation prompt now shows:
+  ```
+  ⚠️ **Atlas** wants to run:
+  `git push origin main`
+  Reason: pushing committed changes to remote
+
+  Reply with **yes**, **always**, or **no**.
+  ```
+
+---
+
+#### Step 10: Update `src/config.ts` and `src/cli.ts` — generate security.json on init
+
+- [x] In `config.ts` `ensureWorkspace()` — after generating openwren.json and .env, generate `security.json` from template if missing
+- [x] In `cli.ts` `init` command — add security.json to the init flow, log: `✓ security.json — shell permissions and path protection`
+- [x] Create `agents/{defaultAgent}/workspace/` directory on init
+
+---
+
+#### Step 11: Manual testing via Telegram
+
+Send these to Atlas on Telegram, in order:
+
+1. **Safe command — ls (no prompt expected):**
+   - [x] Send: `run ls in your workspace`
+   - Expected: lists `readme.md`, `notes.txt`, `todo.md` — no confirmation asked
+
+2. **Safe command — cat (no prompt expected):**
+   - [x] Send: `run cat notes.txt`
+   - Expected: shows "groceries: milk, eggs, bread" — no confirmation
+
+3. **Privileged command — prompt and deny:**
+   - [x] Send: `run git status`
+   - Expected: ⚠️ confirmation prompt appears. Reply **no**
+   - Expected result: "Cancelled." from bot, then agent says command was cancelled. No file changes anywhere
+
+4. **Privileged command — prompt and approve (yes):**
+   - [x] Send: `run git status` again
+   - Reply **yes**
+   - Expected result: command executes, agent shows git status output. No `exec-approvals.json` created — "yes" is one-time only, next `git` command will prompt again
+
+5. **Privileged command — prompt and always:**
+   - [x] Send: `run git status` one more time
+   - Reply **always**
+   - Expected result: command executes, agent shows output. `~/.openwren/exec-approvals.json` gets created with `{"atlas":["git"]}`. Log shows `[approvals] Permanently approved "git" for atlas`
+
+6. **Privileged command — auto-approved after "always":**
+   - [x] Send: `run git log --oneline -5`
+   - Expected result: NO confirmation prompt — `git` is now pre-approved for atlas. Command runs immediately. Log shows `[approvals] Auto-approved "git" for atlas`
+
+8. **Blocked command:**
+   - [x] Send: `run rm -rf /tmp/test`
+   - Expected: immediate error, `rm` not allowed — no confirmation prompt, just a refusal
+
+9. **Protected path via shell:**
+   - [x] Send: `run cat .env`
+   - Expected: blocked — "Command references protected path: .env"
+
+10. **Protected file write:**
+    - [ ] Send: `write "hacked" to agents/atlas/soul.md`
+    - Expected: blocked by `isProtectedWrite`
+
+11. **Protected file read:**
+    - [ ] Send: `read the .env file`
+    - Expected: blocked by `isProtectedRead`
+
+12. **List commands:**
+    - [ ] Send: `what shell commands can you use?`
+    - Expected: calls `list_shell_commands`, shows safe/privileged/subcommand breakdown
+
+13. **Subcommand restriction — git rebase:**
+    - [ ] Send: `run git rebase main`
+    - Expected: blocked — `rebase` not in allowed git subcommands. Agent gets error like `[shell error] Subcommand "rebase" is not allowed for git`
+
+14. **Subcommand restriction — git reset --hard:**
+    - [ ] Send: `run git reset --hard HEAD~1`
+    - Expected: blocked — `reset` not in allowed subcommands. This is the most dangerous git command, exactly what the rails are for
+
+15. **Subcommand restriction — npm publish:**
+    - [ ] Send: `run npm publish`
+    - Expected: blocked — `publish` not in allowed npm subcommands (only ci/info/install/list/ls/outdated/run/test/view are allowed)
+
+16. **Startup logs:**
+    - [ ] Check `~/.openwren/openwren.log` or terminal for security summary on boot
+
+---
+
+**Files created:** `src/security.ts`, `src/templates/security.json`, `src/channels/confirm.ts`
+**Files modified:** `src/tools/shell.ts`, `src/tools/index.ts`, `src/tools/approvals.ts`, `src/tools/filesystem.ts`, `src/config.ts`, `src/cli.ts`, `src/channels/telegram.ts`, `src/channels/discord.ts`, `src/channels/websocket.ts`
 
 ### Phase 10 — Web UI (Dashboard)
 

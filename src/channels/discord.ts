@@ -2,19 +2,8 @@ import { Client, GatewayIntentBits, Partials, ChannelType } from "discord.js";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import { bus } from "../events";
+import { handleConfirmResponse, createConfirmFn, CONFIRM_HELP } from "./confirm";
 import type { Channel } from "./types";
-
-// ---------------------------------------------------------------------------
-// Pending confirmations — keyed by Discord user ID (DMs are 1:1, so user ID
-// is sufficient to identify the conversation)
-// ---------------------------------------------------------------------------
-
-interface PendingCommand {
-  command: string;
-  userId: string;
-  agentId: string;
-  resolve: (approved: boolean | "always") => void;
-}
 
 // ---------------------------------------------------------------------------
 // Per-agent Discord client setup — wires rate limiter, authorization,
@@ -51,8 +40,6 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     return false;
   }
 
-  const pendingConfirmations = new Map<string, PendingCommand>();
-
   client.on("ready", () => {
     console.log(`[discord] ${agentConfig.name} bot ready: @${client.user?.username}`);
   });
@@ -85,23 +72,12 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     if (!text) return;
 
     // Check if we're waiting for a YES/NO/ALWAYS confirmation from this user
-    const pending = pendingConfirmations.get(senderId);
-    if (pending) {
-      const answer = text.toLowerCase();
-      if (answer === "always") {
-        pendingConfirmations.delete(senderId);
-        pending.resolve("always");
-      } else if (answer === "yes" || answer === "y") {
-        pendingConfirmations.delete(senderId);
-        pending.resolve(true);
-      } else if (answer === "no" || answer === "n") {
-        pendingConfirmations.delete(senderId);
-        pending.resolve(false);
+    const confirmResult = handleConfirmResponse(`dc:${senderId}`, text);
+    if (confirmResult !== null) {
+      if (confirmResult === "help") {
+        await message.reply(CONFIRM_HELP);
+      } else if (confirmResult === false) {
         await message.reply("Cancelled.");
-      } else {
-        await message.reply(
-          "Reply with:\n- **yes** — run once\n- **always** — run now and never ask again\n- **no** — cancel"
-        );
       }
       return;
     }
@@ -124,60 +100,60 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     console.log(`[discord] Message from ${senderId} (${userId}) → ${agentConfig.name}: ${text}`);
 
     // Confirm callback — prompts the user before destructive tool calls
-    const confirm = (command: string): Promise<boolean | "always"> => {
-      return new Promise((resolve) => {
-        message.reply(
-          `⚠️ **${agentConfig.name}** wants to run:\n\`${command}\`\n\nReply with **yes**, **always**, or **no**.`
+    const confirm = createConfirmFn(
+      `dc:${senderId}`,
+      agentConfig.name,
+      (prompt) => { message.reply(prompt); }
+    );
+
+    // Fire-and-forget — do NOT await.
+    // Discord.js can process messages concurrently, but using the same
+    // non-blocking pattern as Telegram keeps the confirmation flow consistent
+    // and avoids any risk of handler backpressure blocking confirmation replies.
+    runAgentLoop(userId, agentId, agentConfig, text, confirm)
+      .then(async (result) => {
+        console.log(
+          `[discord] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
         );
-        pendingConfirmations.set(senderId, { command, userId, agentId, resolve });
-      });
-    };
 
-    try {
-      const result = await runAgentLoop(userId, agentId, agentConfig, text, confirm);
-      console.log(
-        `[discord] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
-      );
+        // Bus: broadcast the agent's response to WS observers
+        bus.emit("message_out", {
+          channel: "discord", userId, agentId, agentName: agentConfig.name,
+          text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
+          timestamp: Date.now(),
+        });
 
-      // Bus: broadcast the agent's response to WS observers
-      bus.emit("message_out", {
-        channel: "discord", userId, agentId, agentName: agentConfig.name,
-        text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
-        timestamp: Date.now(),
-      });
-
-      if (result.compacted) {
-        // Bus: notify observers that session history was compacted
-        bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
-        await message.channel.send("📦 Session compacted — older messages summarized.");
-      }
-
-      const reply = result.text;
-
-      // Discord has a 2000 char message limit — split if needed.
-      // First chunk is a reply (so Discord links it to the user's message),
-      // subsequent chunks are plain channel sends.
-      if (reply.length <= 2000) {
-        await message.reply(reply);
-      } else {
-        await message.reply(reply.slice(0, 2000));
-        for (let i = 2000; i < reply.length; i += 2000) {
-          await message.channel.send(reply.slice(i, i + 2000));
+        if (result.compacted) {
+          // Bus: notify observers that session history was compacted
+          bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
+          await message.channel.send("📦 Session compacted — older messages summarized.");
         }
-      }
 
-      if (result.nearThreshold) {
-        await message.channel.send("⚠️ Context is almost full — compaction will run soon.");
-      }
-    } catch (err) {
-      console.error("[discord] Error running agent loop:", err);
-      // Bus: notify observers that the agent loop failed
-      bus.emit("agent_error", {
-        channel: "discord", userId, agentId, agentName: agentConfig.name,
-        error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+        const reply = result.text;
+
+        // Discord has a 2000 char message limit — split if needed.
+        if (reply.length <= 2000) {
+          await message.reply(reply);
+        } else {
+          await message.reply(reply.slice(0, 2000));
+          for (let i = 2000; i < reply.length; i += 2000) {
+            await message.channel.send(reply.slice(i, i + 2000));
+          }
+        }
+
+        if (result.nearThreshold) {
+          await message.channel.send("⚠️ Context is almost full — compaction will run soon.");
+        }
+      })
+      .catch(async (err) => {
+        console.error("[discord] Error running agent loop:", err);
+        // Bus: notify observers that the agent loop failed
+        bus.emit("agent_error", {
+          channel: "discord", userId, agentId, agentName: agentConfig.name,
+          error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+        });
+        await message.reply("Sorry, something went wrong. Please try again.");
       });
-      await message.reply("Sorry, something went wrong. Please try again.");
-    }
   });
 
   client.on("error", (err) => {

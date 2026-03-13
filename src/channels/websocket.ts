@@ -79,7 +79,11 @@ export function setSchedulerStatusProvider(fn: SchedulerStatusFn): void {
 // Connected client tracking
 // ---------------------------------------------------------------------------
 
-/** A tool confirmation awaiting the client's yes/no/always response. */
+/**
+ * WebSocket uses nonce-based structured JSON for confirmations (not text parsing),
+ * so it manages its own pending map rather than using the shared confirm.ts module.
+ * The confirm callback still returns a standard ConfirmFn-compatible promise.
+ */
 interface PendingConfirm {
   nonce: string;
   resolve: (answer: boolean | "always") => void;
@@ -229,7 +233,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     // Confirm callback — sends a confirm_request to THIS specific client,
     // then waits for a confirm_response with the matching nonce.
     // The returned promise resolves when the client replies (or disconnects).
-    const confirm = (command: string): Promise<boolean | "always"> => {
+    const confirm = (command: string, reason?: string): Promise<boolean | "always"> => {
       const nonce = crypto.randomUUID();
       return new Promise((resolve) => {
         client.pendingConfirmations.set(nonce, { nonce, resolve });
@@ -238,6 +242,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
           agentId,
           agentName: agentConfig.name,
           command,
+          reason,
           timestamp: Date.now(),
         });
       });

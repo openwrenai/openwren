@@ -498,6 +498,7 @@ function cmdInit(args: string[]): void {
     path.join(WORKSPACE, "memory"),
     path.join(WORKSPACE, "agents"),
     path.join(WORKSPACE, "agents", "atlas"),
+    path.join(WORKSPACE, "agents", "atlas", "workspace"),
   ];
 
   for (const dir of dirs) {
@@ -518,14 +519,22 @@ function cmdInit(args: string[]): void {
   fs.writeFileSync(envPath, envTemplate, "utf-8");
   console.log("✓ Created .env");
 
-  // 4. Write default Atlas soul file
+  // 4. Write template security.json
+  const securityPath = path.join(WORKSPACE, "security.json");
+  if (!fs.existsSync(securityPath) || force) {
+    const securityTemplate = fs.readFileSync(path.join(templatesDir, "security.json"), "utf-8");
+    fs.writeFileSync(securityPath, securityTemplate, "utf-8");
+    console.log("✓ Created security.json — shell permissions and path protection");
+  }
+
+  // 6. Write default Atlas soul file
   const soulPath = path.join(WORKSPACE, "agents", "atlas", "soul.md");
   if (!fs.existsSync(soulPath) || force) {
     fs.writeFileSync(soulPath, DEFAULT_SOUL, "utf-8");
     console.log("✓ Created agents/atlas/soul.md");
   }
 
-  // 5. Print next steps
+  // 7. Print next steps
   console.log(`
 Setup complete! Next steps:
 

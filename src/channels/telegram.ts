@@ -2,33 +2,8 @@ import { Bot } from "grammy";
 import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import { bus } from "../events";
+import { handleConfirmResponse, createConfirmFn, CONFIRM_HELP } from "./confirm";
 import type { Channel } from "./types";
-
-// ---------------------------------------------------------------------------
-// Pending confirmations
-// ---------------------------------------------------------------------------
-
-export interface PendingCommand {
-  command: string;
-  toolCallId: string;
-  userId: string;
-  agentId: string;
-  resolve: (approved: boolean | "always") => void;
-}
-
-const pendingConfirmations = new Map<number, PendingCommand>();
-
-export function setPendingConfirmation(chatId: number, pending: PendingCommand): void {
-  pendingConfirmations.set(chatId, pending);
-}
-
-export function getPendingConfirmation(chatId: number): PendingCommand | undefined {
-  return pendingConfirmations.get(chatId);
-}
-
-export function clearPendingConfirmation(chatId: number): void {
-  pendingConfirmations.delete(chatId);
-}
 
 // ---------------------------------------------------------------------------
 // Telegram markdown formatter
@@ -44,6 +19,27 @@ export function clearPendingConfirmation(chatId: number): void {
  * strikethrough, image syntax, etc.) is stripped or converted so the
  * message never fails Telegram's parser.
  */
+/**
+ * Sends a message via ctx.reply(), falling back to plain text if Telegram
+ * rejects the Markdown formatting despite our best efforts in formatForTelegram.
+ */
+async function safeSend(
+  ctx: { reply: (text: string, opts?: Record<string, unknown>) => Promise<unknown> },
+  text: string
+): Promise<void> {
+  try {
+    await ctx.reply(text, { parse_mode: "Markdown" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("can't parse entities")) {
+      console.log("[telegram] Markdown parse failed — retrying as plain text");
+      await ctx.reply(text);
+    } else {
+      throw err;
+    }
+  }
+}
+
 function formatForTelegram(text: string): string {
   let result = text;
   // # headings → **bold**
@@ -58,6 +54,27 @@ function formatForTelegram(text: string): string {
   result = result.replace(/~~(.+?)~~/g, "$1");
   // ![alt](url) images → just the URL (can't render images as text)
   result = result.replace(/!\[.*?\]\((.+?)\)/g, "$1");
+  // Escape special chars outside code spans — Telegram treats _ and * as formatting.
+  // Preserve code spans (``` blocks and `inline`) and **bold** pairs we created.
+  // Step 1: Temporarily replace **bold** with a placeholder to protect it.
+  const boldPlaceholder = "\x00BOLD\x00";
+  result = result.replace(/\*\*(.+?)\*\*/g, `${boldPlaceholder}$1${boldPlaceholder}`);
+  // Step 2: Escape _ and * outside code spans.
+  result = result.replace(/(```[\s\S]*?```|`[^`]+`)|([_*])/g, (match, codeSpan, special) => {
+    if (codeSpan) return codeSpan;  // preserve code spans untouched
+    return `\\${special}`;           // escape bare _ and *
+  });
+  // Step 3: Restore **bold** from placeholder.
+  result = result.replace(new RegExp(boldPlaceholder, "g"), "**");
+  // Ensure backticks are balanced — Telegram rejects unmatched code entities.
+  // First strip triple-backtick code blocks (count as paired), then check singles.
+  const withoutCodeBlocks = result.replace(/```[\s\S]*?```/g, "");
+  const singleBackticks = (withoutCodeBlocks.match(/`/g) || []).length;
+  if (singleBackticks % 2 !== 0) {
+    // Odd backticks — strip all inline backticks to avoid parse failure
+    result = result.replace(/`([^`]*)`/g, "$1");  // remove paired first
+    result = result.replace(/`/g, "");              // remove any remaining stray ones
+  }
   return result;
 }
 
@@ -138,25 +155,13 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
     const text = ctx.message.text.trim();
     const userId: string = (ctx as any).userId;
 
-    // Check if we're waiting for a YES/NO confirmation
-    const pending = pendingConfirmations.get(chatId);
-    if (pending) {
-      const answer = text.toLowerCase();
-      if (answer === "always") {
-        clearPendingConfirmation(chatId);
-        pending.resolve("always");
-      } else if (answer === "yes" || answer === "y") {
-        clearPendingConfirmation(chatId);
-        pending.resolve(true);
-      } else if (answer === "no" || answer === "n") {
-        clearPendingConfirmation(chatId);
-        pending.resolve(false);
+    // Check if we're waiting for a YES/NO/ALWAYS confirmation
+    const confirmResult = handleConfirmResponse(`tg:${chatId}`, text);
+    if (confirmResult !== null) {
+      if (confirmResult === "help") {
+        await ctx.reply(CONFIRM_HELP, { parse_mode: "Markdown" });
+      } else if (confirmResult === false) {
         await ctx.reply("Cancelled.");
-      } else {
-        await ctx.reply(
-          'Reply with:\n• **yes** — run once\n• **always** — run now and never ask again\n• **no** — cancel',
-          { parse_mode: "Markdown" }
-        );
       }
       return;
     }
@@ -183,65 +188,58 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
     console.log(`[telegram] Message from ${senderId} (${userId}) → ${agentConfig.name}: ${message}`);
 
     // Confirm callback — asks the user YES/NO/ALWAYS before destructive operations
-    const confirm = (command: string): Promise<boolean | "always"> => {
-      return new Promise((resolve) => {
-        ctx.reply(
-          `⚠️ **${agentConfig.name}** wants to run:\n\`${command}\`\n\nReply with **yes**, **always**, or **no**.`,
-          { parse_mode: "Markdown" }
-        );
-        setPendingConfirmation(chatId, {
-          command,
-          toolCallId: "",
-          userId,
-          agentId,
-          resolve,
+    const confirm = createConfirmFn(
+      `tg:${chatId}`,
+      agentConfig.name,
+      (prompt) => { ctx.reply(prompt, { parse_mode: "Markdown" }); }
+    );
+
+    // Fire-and-forget — do NOT await.
+    // grammY processes messages sequentially: if we await here, the handler
+    // blocks and grammY cannot deliver the user's confirmation response
+    // (yes/no/always) until the agent loop finishes — causing a deadlock.
+    runAgentLoop(userId, agentId, agentConfig, message, confirm)
+      .then(async (result) => {
+        console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
+
+        // Bus: broadcast the agent's response to WS observers
+        bus.emit("message_out", {
+          channel: "telegram", userId, agentId, agentName: agentConfig.name,
+          text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
+          timestamp: Date.now(),
         });
-      });
-    };
 
-    try {
-      const result = await runAgentLoop(userId, agentId, agentConfig, message, confirm);
-      console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
-
-      // Bus: broadcast the agent's response to WS observers
-      bus.emit("message_out", {
-        channel: "telegram", userId, agentId, agentName: agentConfig.name,
-        text: result.text, compacted: result.compacted, nearThreshold: result.nearThreshold,
-        timestamp: Date.now(),
-      });
-
-      if (result.compacted) {
-        // Bus: notify observers that session history was compacted
-        bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
-        await ctx.reply("📦 Session compacted — older messages summarized.");
-      }
-
-      const formatted = formatForTelegram(result.text);
-
-      // Telegram has a 4096 char message limit — split if needed.
-      // ctx.reply() is grammY's context shorthand — it calls
-      // bot.api.sendMessage(ctx.chat.id, ...) under the hood, replying
-      // to the same chat the incoming message came from.
-      if (formatted.length <= 4096) {
-        await ctx.reply(formatted, { parse_mode: "Markdown" });
-      } else {
-        for (let i = 0; i < formatted.length; i += 4096) {
-          await ctx.reply(formatted.slice(i, i + 4096), { parse_mode: "Markdown" });
+        if (result.compacted) {
+          // Bus: notify observers that session history was compacted
+          bus.emit("session_compacted", { userId, agentId, timestamp: Date.now() });
+          await ctx.reply("📦 Session compacted — older messages summarized.");
         }
-      }
 
-      if (result.nearThreshold) {
-        await ctx.reply("⚠️ Context is almost full — compaction will run soon.");
-      }
-    } catch (err) {
-      console.error("[telegram] Error running agent loop:", err);
-      // Bus: notify observers that the agent loop failed
-      bus.emit("agent_error", {
-        channel: "telegram", userId, agentId, agentName: agentConfig.name,
-        error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+        const formatted = formatForTelegram(result.text);
+
+        // Telegram has a 4096 char message limit — split if needed.
+        // safeSend tries Markdown first, falls back to plain text on parse errors.
+        if (formatted.length <= 4096) {
+          await safeSend(ctx, formatted);
+        } else {
+          for (let i = 0; i < formatted.length; i += 4096) {
+            await safeSend(ctx, formatted.slice(i, i + 4096));
+          }
+        }
+
+        if (result.nearThreshold) {
+          await ctx.reply("⚠️ Context is almost full — compaction will run soon.");
+        }
+      })
+      .catch(async (err) => {
+        console.error("[telegram] Error running agent loop:", err);
+        // Bus: notify observers that the agent loop failed
+        bus.emit("agent_error", {
+          channel: "telegram", userId, agentId, agentName: agentConfig.name,
+          error: err instanceof Error ? err.message : String(err), timestamp: Date.now(),
+        });
+        await ctx.reply("Sorry, something went wrong. Please try again.");
       });
-      await ctx.reply("Sorry, something went wrong. Please try again.");
-    }
   });
 
   bot.catch((err) => {

@@ -287,6 +287,12 @@ function ensureWorkspace(): void {
     fs.writeFileSync(envPath, loadTemplate("env.template"), "utf-8");
     console.log(`[boot] Generated .env — add your API keys and tokens here`);
   }
+
+  const securityPath = path.join(WORKSPACE_DIR, "security.json");
+  if (!fs.existsSync(securityPath)) {
+    fs.writeFileSync(securityPath, loadTemplate("security.json"), "utf-8");
+    console.log(`[boot] Generated security.json — shell permissions and path protection`);
+  }
 }
 
 function loadConfig(): Config {

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { config } from "../config";
+import { isProtectedWrite, isProtectedRead, isAllowedOutsidePath } from "../security";
 import type { ToolDefinition } from "../providers";
 
 // ---------------------------------------------------------------------------
@@ -9,13 +10,21 @@ import type { ToolDefinition } from "../providers";
 
 /**
  * Resolves and validates that the given file path stays within the workspace.
- * Throws if the path escapes the sandbox.
+ * For reads: allows outside-workspace paths listed in paths.allowReadOutside.
+ * For writes: always restricted to workspace.
  */
-function safePath(filePath: string): string {
+function safePath(filePath: string, allowOutside: boolean = false): string {
   const workspace = config.workspaceDir;
   const resolved = path.resolve(workspace, filePath);
 
-  if (!resolved.startsWith(workspace + path.sep) && resolved !== workspace) {
+  const insideWorkspace = resolved.startsWith(workspace + path.sep) || resolved === workspace;
+
+  if (!insideWorkspace) {
+    // For reads, check if this outside path is explicitly allowed
+    if (allowOutside && isAllowedOutsidePath(resolved)) {
+      return resolved;
+    }
+
     throw new Error(
       `Path "${filePath}" resolves outside the workspace sandbox (${workspace}). Access denied.`
     );
@@ -24,13 +33,31 @@ function safePath(filePath: string): string {
   return resolved;
 }
 
+/**
+ * Returns the workspace-relative path for protected path matching.
+ * e.g. /home/user/.openwren/agents/atlas/soul.md → agents/atlas/soul.md
+ */
+function workspaceRelative(resolved: string): string {
+  const workspace = config.workspaceDir;
+  if (resolved.startsWith(workspace + path.sep)) {
+    return resolved.slice(workspace.length + 1);
+  }
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
 
-export async function readFile(filePath: string): Promise<string> {
+export async function readFile(filePath: string, _agentId?: string): Promise<string> {
   try {
-    const resolved = safePath(filePath);
+    const resolved = safePath(filePath, true); // allow outside-workspace reads if configured
+
+    // Check read-protected paths
+    const readProtected = isProtectedRead(workspaceRelative(resolved));
+    if (readProtected) {
+      return `[read error] Path is read-protected: ${readProtected}`;
+    }
 
     if (!fs.existsSync(resolved)) {
       return `[read error] File not found: ${filePath}`;
@@ -64,9 +91,15 @@ export async function readFile(filePath: string): Promise<string> {
 // Write
 // ---------------------------------------------------------------------------
 
-export async function writeFile(filePath: string, content: string): Promise<string> {
+export async function writeFile(filePath: string, content: string, agentId?: string): Promise<string> {
   try {
-    const resolved = safePath(filePath);
+    const resolved = safePath(filePath); // writes always restricted to workspace
+
+    // Check write-protected paths (per-agent override if agentId provided)
+    const writeProtected = isProtectedWrite(workspaceRelative(resolved), agentId);
+    if (writeProtected) {
+      return `[write error] Path is write-protected: ${writeProtected}`;
+    }
 
     // Ensure parent directory exists
     const dir = path.dirname(resolved);
