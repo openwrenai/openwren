@@ -93,12 +93,8 @@ export async function executeShell(command: string, agentId: string): Promise<st
   const { bin, args } = parseCommand(command);
 
   try {
-    const agentWorkspace = path.join(config.workspaceDir, "agents", agentId, "workspace");
-    if (!fs.existsSync(agentWorkspace)) {
-      fs.mkdirSync(agentWorkspace, { recursive: true });
-    }
     const { stdout, stderr } = await execFileAsync(bin, args, {
-      cwd: agentWorkspace,
+      cwd: config.workspaceDir,
       timeout: 15_000, // 15 seconds max
       maxBuffer: 1024 * 512, // 512 KB output cap
     });

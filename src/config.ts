@@ -31,8 +31,16 @@ export interface UserConfig {
 /** Per-agent personality and model config. Channel-agnostic — bindings live in config.bindings. */
 export interface AgentConfig {
   name: string;
-  model?: string;    // "provider/model" override, e.g. "anthropic/claude-sonnet-4-6". Inherits defaultModel if unset.
-  fallback?: string; // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
+  model?: string;       // "provider/model" override, e.g. "anthropic/claude-sonnet-4-6". Inherits defaultModel if unset.
+  fallback?: string;    // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
+  description?: string; // One-liner shown to managers via list_team and system prompt injection
+  role?: string; // "manager" or "worker" (default: "worker") — maps to roles.{name} for tool permissions
+}
+
+/** Team config — defines manager-worker relationships. Independent of any single agent. */
+export interface TeamConfig {
+  manager: string;   // agent ID of the team manager
+  members: string[]; // agent IDs in the team
 }
 
 /** Top-level application config. Loaded once at boot from ~/.openwren/openwren.json merged over defaults. */
@@ -58,6 +66,8 @@ export interface Config {
     };
   };
   bindings: Record<string, Record<string, string>>; // bindings[channel][agentId] = credential
+  teams: Record<string, TeamConfig>; // teams[teamName] = { manager, members }
+  roles: Record<string, string[]>;  // roles[roleName] = list of permitted tool names
   timezone: string;
   session: {
     idleResetMinutes: number;
@@ -151,6 +161,11 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
     },
   },
   bindings: {},
+  teams: {},
+  roles: {
+    manager: ["create_workflow", "delegate_task", "query_workflow", "read_file", "write_file", "save_memory", "memory_search"],
+    worker: ["read_file", "write_file", "log_progress", "complete_task", "save_memory", "memory_search"],
+  },
   gateway: {
     wsToken: "",
   },
@@ -252,6 +267,174 @@ function resolveEnvRefs(obj: any): any {
 }
 
 // ---------------------------------------------------------------------------
+// Agent-centric path helpers
+// ---------------------------------------------------------------------------
+
+/** Session directory for user ↔ agent conversations */
+export function agentSessionDir(agentId: string, userId: string): string {
+  return path.join(WORKSPACE_DIR, "agents", agentId, "sessions", "users", userId);
+}
+
+/** Active session file for user ↔ agent */
+export function agentSessionPath(agentId: string, userId: string): string {
+  return path.join(agentSessionDir(agentId, userId), "active.jsonl");
+}
+
+/** Memory directory for an agent */
+export function agentMemoryDir(agentId: string): string {
+  return path.join(WORKSPACE_DIR, "agents", agentId, "memory");
+}
+
+/** Workflow session for a manager agent */
+export function agentWorkflowSessionPath(agentId: string, name: string): string {
+  return path.join(WORKSPACE_DIR, "agents", agentId, "sessions", "workflows", `${name}.jsonl`);
+}
+
+/** Task session for an agent executing a delegated task */
+export function agentTaskSessionPath(agentId: string, taskId: string): string {
+  return path.join(WORKSPACE_DIR, "agents", agentId, "sessions", "tasks", `${taskId}.jsonl`);
+}
+
+/** Job session for a scheduled job */
+export function agentJobSessionPath(agentId: string, jobId: string): string {
+  return path.join(WORKSPACE_DIR, "agents", agentId, "sessions", "jobs", `${jobId}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
+// Team helpers
+// ---------------------------------------------------------------------------
+
+/** Returns the team folder path for a given team name */
+export function getTeamFolder(teamName: string): string {
+  return path.join(WORKSPACE_DIR, "teams", teamName);
+}
+
+/** Returns all teams this agent manages or belongs to */
+export function getTeamsForAgent(agentId: string): { name: string; role: "manager" | "member" }[] {
+  const result: { name: string; role: "manager" | "member" }[] = [];
+  for (const [name, team] of Object.entries(config.teams)) {
+    if (team.manager === agentId) {
+      result.push({ name, role: "manager" });
+    } else if (team.members.includes(agentId)) {
+      result.push({ name, role: "member" });
+    }
+  }
+  return result;
+}
+
+/** Checks if fromAgent can delegate to toAgent (direct report in any team fromAgent manages) */
+export function canDelegateTo(fromAgent: string, toAgent: string): boolean {
+  for (const team of Object.values(config.teams)) {
+    if (team.manager === fromAgent && team.members.includes(toAgent)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Returns the team members with descriptions for a manager agent */
+export function getTeamMembers(agentId: string): { id: string; description: string }[] {
+  const members: { id: string; description: string }[] = [];
+  for (const team of Object.values(config.teams)) {
+    if (team.manager === agentId) {
+      for (const memberId of team.members) {
+        const agent = config.agents[memberId];
+        members.push({
+          id: memberId,
+          description: agent?.description || "No description",
+        });
+      }
+    }
+  }
+  return members;
+}
+
+// ---------------------------------------------------------------------------
+// Role helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the list of permitted tool names for an agent based on its role.
+ * Returns null if agent has no role — meaning no filtering (all tools available).
+ * Task context tools (log_progress, complete_task) are added by the caller when needed.
+ */
+export function getAgentPermissions(agentId: string): string[] | null {
+  const agent = config.agents[agentId];
+  if (!agent?.role) return null; // No role = all tools (backwards compatible)
+
+  const permissions = config.roles[agent.role];
+  if (!permissions) {
+    console.warn(`[roles] Agent "${agentId}" has role "${agent.role}" but no matching role definition — allowing all tools`);
+    return null;
+  }
+
+  return permissions;
+}
+
+// ---------------------------------------------------------------------------
+// Team validation — run after config is loaded
+// ---------------------------------------------------------------------------
+
+export function validateTeams(): void {
+  const allAgentIds = Object.keys(config.agents);
+
+  for (const [teamName, team] of Object.entries(config.teams)) {
+    // Check manager exists
+    if (!allAgentIds.includes(team.manager)) {
+      console.warn(`[teams] Warning: team "${teamName}" manager "${team.manager}" is not a configured agent`);
+    }
+
+    // Check members exist
+    for (const memberId of team.members) {
+      if (!allAgentIds.includes(memberId)) {
+        console.warn(`[teams] Warning: team "${teamName}" member "${memberId}" is not a configured agent`);
+      }
+    }
+
+    // Check manager is not also a member of their own team
+    if (team.members.includes(team.manager)) {
+      console.warn(`[teams] Warning: team "${teamName}" manager "${team.manager}" is also listed as a member`);
+    }
+  }
+
+  // Check for circular management (A manages B manages A)
+  for (const [teamName, team] of Object.entries(config.teams)) {
+    for (const memberId of team.members) {
+      // Is this member a manager of a team that contains the current manager?
+      for (const [otherName, otherTeam] of Object.entries(config.teams)) {
+        if (otherTeam.manager === memberId && otherTeam.members.includes(team.manager)) {
+          console.warn(
+            `[teams] Warning: circular management detected — ` +
+            `"${team.manager}" manages "${memberId}" in team "${teamName}", ` +
+            `but "${memberId}" manages "${team.manager}" in team "${otherName}"`
+          );
+        }
+      }
+    }
+  }
+
+  // Validate roles — warn if agent references unknown role
+  for (const [agentId, agent] of Object.entries(config.agents)) {
+    if (agent.role && !config.roles[agent.role]) {
+      console.warn(`[roles] Warning: agent "${agentId}" has role "${agent.role}" but no matching role definition in roles.*`);
+    }
+  }
+
+  // Startup log — teams
+  for (const [teamName, team] of Object.entries(config.teams)) {
+    console.log(`[teams] ${teamName}: ${team.manager} → ${team.members.join(", ")}`);
+  }
+
+  // Startup log — roles
+  for (const [agentId, agent] of Object.entries(config.agents)) {
+    if (agent.role) {
+      const perms = config.roles[agent.role];
+      console.log(`[roles] ${agentId}: ${agent.role} (${perms ? perms.length + " tools" : "unknown role"})`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Templates — read from src/templates/ at runtime
 // ---------------------------------------------------------------------------
 
@@ -270,6 +453,11 @@ function loadTemplate(filename: string): string {
 // loadConfig — boot sequence
 // ---------------------------------------------------------------------------
 
+/**
+ * Ensures workspace root exists and generates missing template files.
+ * Runs early during loadConfig() — before the full config is available.
+ * All directory creation lives in workspace.ts initWorkspace().
+ */
 function ensureWorkspace(): void {
   if (!fs.existsSync(WORKSPACE_DIR)) {
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -362,10 +550,12 @@ function loadConfig(): Config {
     }
   }
 
-  return {
+  const finalConfig = {
     ...merged,
     workspaceDir: WORKSPACE_DIR,
   };
+
+  return finalConfig;
 }
 
 export const config = loadConfig();

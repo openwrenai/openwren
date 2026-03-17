@@ -23,8 +23,6 @@ Add Discord as a second messaging channel. Each bot hardwired to one agent — n
 Add web research tools: search, fetch, and browser. Search uses a provider abstraction (like LLM providers) so backends are swappable via config. Fetch and browser are standalone tools.
 ### Phase 9.1 — Cron / Scheduled Tasks + Heartbeat
 
-## Left to do Phases
-
 ### Phase 9.2 — Shell Security & Confirmation System
 
 The current shell system has security gaps: only 4 commands require confirmation, `git push`/`npm`/`curl` run freely, scheduled jobs bypass confirmation entirely, agents can overwrite their own soul files, and the confirmation flow is duplicated across all three channel adapters.
@@ -321,6 +319,696 @@ Send these to Atlas on Telegram, in order:
 **Files created:** `src/security.ts`, `src/templates/security.json`, `src/channels/confirm.ts`
 **Files modified:** `src/tools/shell.ts`, `src/tools/index.ts`, `src/tools/approvals.ts`, `src/tools/filesystem.ts`, `src/config.ts`, `src/cli.ts`, `src/channels/telegram.ts`, `src/channels/discord.ts`, `src/channels/websocket.ts`
 
+---
+
+## Left to do Phases
+
+### Phase 9.3 — Agent Orchestration: Teams, Delegations & Multi-Level Hierarchy
+
+Agents can form teams with manager-worker relationships. A manager agent (e.g. Atlas) creates a full DAG of tasks upfront with declared dependencies, then the orchestrator executes it mechanically — no LLM involved in dependency resolution. Supports multiple hierarchy levels — a mid-level manager creates its own sub-DAG when its task starts. Human user stays at the top, talking to the manager agent, which orchestrates everything underneath.
+
+**Core concepts:**
+- **DAG-first orchestration** — manager reads `workflow.md`, creates ALL tasks with dependencies in one shot, then goes idle. The orchestrator (deterministic code, not LLM) handles dependency resolution, queuing, and execution order. Manager only gets pinged for workflow completion and task failures.
+- **Teams config (top-level)** — `teams.alpha.manager: "atlas"`, `teams.alpha.members: [...]`. Teams are independent of any single agent — changing manager is one config line, no folder migration.
+- **Tool profiles** — `role: "manager"` (delegate, query) vs `"worker"` (shell, read/write files, fetch, search). Defaults in code, user-customizable in `openwren.json`. Task context adds `log_progress` + `complete_task` on top of any profile (they stack).
+- **Manager enforcement** — soul-level ("you only delegate") + tool-level (manager profile doesn't include worker tools). Belt and suspenders.
+- **Multi-level hierarchy** — each manager creates a DAG for its direct reports only. Mid-level managers (both worker and manager) create their own sub-DAG when their task starts. A manager's task doesn't complete until its sub-DAG completes (tracked via `parentTask`).
+- **SQLite + Drizzle ORM** — single source of truth for all workflow and task state. `~/.openwren/data/workflows.db`. Migrations run automatically on startup via `getDb()` → `migrate()` — no-op if already applied. Migration SQL files generated at dev time, shipped in the npm package.
+- **Event bus** — lightweight triggers only. `task_completed` triggers orchestrator dependency resolution (code). Manager wake-ups only for: workflow completion (deliver summary) and task failures (handle exception).
+- **Team folders** — `~/.openwren/teams/{team-name}/{workflow-slug}/`. One folder per workflow run. All team members + manager have read/write access. Deliverables go here. Sub-managers' workers write to the same folder (one folder for the entire DAG). No auto-cleanup — user manages retention manually or via agents.
+- **No dedicated workflow session** — manager creates DAG from whichever session invoked it: user session (user sends "run the report") or job session (scheduler fires "daily-pipeline" job). Mid-level managers delegate from their task session. User session stays clean because status queries read from the DB, not session history.
+- **Agent files split** — `soul.md` (personality) + `workflow.md` (orchestration logic). Separate concerns.
+- **Team awareness** — team info auto-injected into manager's system prompt from config. Source of truth is config, not soul.md — prevents sync issues.
+
+**Directory structure (agent-centric + top-level teams):**
+```
+~/.openwren/
+├── data/
+│   └── workflows.db                     # SQLite — workflows, tasks, deps, progress log
+├── teams/
+│   ├── alpha/                           # Atlas's team shared folder
+│   │   └── daily-report-2026-03-14-183022/  # One folder per workflow run
+│   │       ├── research-summary.txt     # Researcher writes here
+│   │       ├── action-items.txt         # Analyst writes here
+│   │       ├── draft-report.md          # Writer writes here
+│   │       └── final-report.md          # Sub-team (formatter) writes here too — same folder
+│   └── outreach/                        # Outreach-agent's team (used when outreach is top-level manager)
+├── agents/
+│   ├── atlas/
+│   │   ├── soul.md                      # Personality, values
+│   │   ├── workflow.md                  # Orchestration: what tasks, what order, what deps
+│   │   ├── heartbeat.md
+│   │   ├── skills/
+│   │   ├── workspace/                   # Seed files, static inputs
+│   │   ├── memory/
+│   │   └── sessions/
+│   │       ├── users/
+│   │       │   └── owner/
+│   │       │       └── active.jsonl     # Human ↔ Atlas (clean, no orchestration chatter)
+│   │       ├── jobs/                    # Scheduled/cron jobs (heartbeats, briefings)
+│   │       └── tasks/                   # Tasks received BY atlas (if it has a super-agent)
+│   │
+│   ├── researcher/
+│   │   ├── soul.md
+│   │   └── sessions/
+│   │       └── tasks/
+│   │           └── research-2026-03-14-183022.jsonl   # Working memory while executing
+│   │
+│   ├── editor/
+│   │   ├── soul.md
+│   │   ├── workflow.md                  # Its own orchestration for sub-team
+│   │   └── sessions/
+│   │       └── tasks/
+│   │           └── edit-2026-03-14-183022.jsonl  # Delegates sub-tasks from here (no create_workflow)
+│   │
+│   └── formatter/
+│       └── ... (pure worker, no workflow.md)
+```
+
+**Session types per agent:**
+- `sessions/users/{userId}/active.jsonl` — human conversation. Clean. No orchestration traffic.
+- `sessions/tasks/{slug}.jsonl` — e.g. `research-2026-03-14-183022.jsonl`. Worker's working memory during task execution. Sub-managers also delegate from their task session.
+- `sessions/jobs/{jobId}.jsonl` — scheduled cron jobs (existing Phase 9.1). Manager may create DAG from here if triggered by scheduler.
+
+**How the user session stays clean:**
+Atlas can be active in multiple sessions simultaneously (mutex is per-session-file). User messages → user session. Workflow orchestration → workflow session. Completely independent. User asks "what's the weather?" at 08:30 while a pipeline runs — Atlas answers from the user session. Pipeline continues in its own session untouched. Status queries work because Atlas reads from the DB, not from the workflow session.
+
+**Database schema (Drizzle ORM + better-sqlite3):**
+
+All tables use integer autoincrement IDs for compact, fast PKs and FKs. Workflows and tasks also have a `slug` column — a human-readable identifier used in logs, Telegram messages, session file names, and DB browsing. Slugs are code-generated (not LLM-generated) from the name + full timestamp to guarantee uniqueness even with multiple runs per day:
+
+```
+Workflow slug: "lead-pipeline-2026-03-14-183022"     (name + date + HHMMSS)
+Task slug:     "lead-gen-2026-03-14-183022"          (agent + date + HHMMSS)
+```
+
+Session files use the slug: `agents/atlas/sessions/workflows/lead-pipeline-2026-03-14-183022.jsonl`
+Logs use the slug: `[task lead-gen-2026-03-14-183022] completed`
+DB queries use the integer id internally: `WHERE id = 3`
+
+`parentTask` has no `.references()` in Drizzle schema due to TypeScript circular self-reference limitation. FK is not enforced at DB level — relationship enforced in orchestrator code.
+
+```typescript
+// src/orchestrator/schema.ts
+
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+
+export const workflows = sqliteTable("workflows", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull().unique(),             // "daily-report-2026-03-14-183022"
+  name: text("name").notNull(),                      // "Daily Project Report"
+  managerAgentId: text("manager_agent_id").notNull(),  // "atlas"
+  status: text("status").notNull().default("running"), // running | completed | failed
+  startedAt: integer("started_at").notNull(),         // Unix ms
+  completedAt: integer("completed_at"),
+  summary: text("summary"),
+  sessionPath: text("session_path"),
+  metadata: text("metadata"),                         // JSON blob for extras
+});
+
+export const tasks = sqliteTable("tasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull().unique(),              // "research-2026-03-14-183022"
+  workflowId: integer("workflow_id").notNull().references(() => workflows.id),
+  agentId: text("agent_id").notNull(),                // "researcher" (executor)
+  assignedBy: text("assigned_by").notNull(),          // "atlas" (delegator)
+  parentTask: integer("parent_task"),                  // Self-ref, enforced in code not DB
+  prompt: text("prompt").notNull(),
+  status: text("status").notNull().default("queued"), // queued | in_progress | completed | failed | blocked
+  createdAt: integer("created_at").notNull(),
+  startedAt: integer("started_at"),
+  completedAt: integer("completed_at"),
+  resultSummary: text("result_summary"),
+  deliverables: text("deliverables"),                 // JSON array of file paths in team folder
+  error: text("error"),
+  sessionPath: text("session_path"),
+}, (table) => [
+  index("idx_tasks_workflow").on(table.workflowId),
+]);
+
+export const taskDeps = sqliteTable("task_deps", {
+  taskId: integer("task_id").notNull().references(() => tasks.id),
+  dependsOn: integer("depends_on").notNull().references(() => tasks.id),
+}, (table) => [
+  index("idx_taskdeps_task").on(table.taskId),
+  index("idx_taskdeps_depends").on(table.dependsOn),
+]);
+
+export const taskLog = sqliteTable("task_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: integer("task_id").notNull().references(() => tasks.id),
+  agentId: text("agent_id").notNull(),
+  timestamp: integer("timestamp").notNull(),
+  entry: text("entry").notNull(),
+}, (table) => [
+  index("idx_tasklog_task").on(table.taskId),
+]);
+```
+
+**Orchestrator dependency resolution (deterministic code, no LLM):**
+```
+On task completion:
+1. Update task row → status: completed
+2. Query task_deps: find all tasks that depend on the completed task
+3. For each dependent task:
+   a. Check ALL its dependencies (SELECT depends_on WHERE task_id = X)
+   b. Are ALL of those dependencies completed?
+   c. If yes → enqueue the dependent task (status: queued → picked up by queue)
+4. Check if ALL tasks in the workflow are completed
+   a. If yes → workflow complete → deliver summary to user via channel
+   b. If no tasks queued/running but some blocked → deadlock warning (invalid DAG)
+
+On task failure:
+1. Update task row → status: failed
+2. Cascade-cancel all dependent tasks (tasks waiting on the failed one) → status: cancelled
+3. Cancel all child tasks (WHERE parentTask = failedTaskId) → status: cancelled
+4. Check if workflow should be marked as failed
+5. Wake manager agent via notify.ts — run agent loop turn so manager can report failure to user
+   (Future: give manager tools to retry, skip, or abort — currently just reports)
+```
+
+**Config example:**
+```json5
+{
+  // Teams — independent of any single agent
+  "teams.alpha.manager": "atlas",
+  "teams.alpha.members": ["lead-generator", "copywriter", "graphic-designer", "outreach-agent"],
+  "teams.outreach.manager": "outreach-agent",
+  "teams.outreach.members": ["linkedin-sender", "email-sender"],
+
+  // Agent descriptions — shown to managers via system prompt injection
+  "agents.atlas.description": "Top-level manager, orchestrates the daily lead pipeline",
+  "agents.atlas.role": "manager",
+  "agents.lead-generator.description": "Finds and qualifies sales leads",
+  "agents.lead-generator.role": "worker",
+  "agents.outreach-agent.description": "Manages multi-channel outreach campaigns",
+  "agents.outreach-agent.role": "manager",
+  "agents.linkedin-sender.description": "Sends LinkedIn connection requests and DMs",
+  "agents.linkedin-sender.role": "worker",
+}
+```
+
+**Full DAG flow example:**
+```
+User sends "Run the daily project report" to Atlas on Telegram
+  → Atlas responds from user session (agents/atlas/sessions/users/owner/active.jsonl)
+
+Atlas reads workflow.md, calls create_workflow, then creates entire DAG:
+  delegate_task → task-1 (researcher, no deps)          → queued, starts immediately
+  delegate_task → task-2 (analyst, no deps)             → queued, starts immediately (parallel)
+  delegate_task → task-3 (writer, dependsOn: [1, 2])    → blocked
+  delegate_task → task-4 (editor, dependsOn: [3])       → blocked
+Atlas replies "Pipeline running" and goes idle. No more LLM calls for orchestration.
+
+task-1 runs in: agents/researcher/sessions/tasks/research-2026-03-19-210001.jsonl
+task-2 runs in: agents/analyst/sessions/tasks/action-items-2026-03-19-210001.jsonl
+
+task-2 completes → resolver checks deps → task-3 still blocked (task-1 pending)
+task-1 completes → resolver checks deps → task-3 ALL deps met → queued → starts
+task-3 completes → resolver checks deps → task-4 ALL deps met → queued → starts
+
+Editor wakes in task session. It's a sub-manager (gets sub-manager skill, not manager skill).
+  Does NOT call create_workflow — uses existing workflow ID from task context.
+  delegate_task → task-5 (spellchecker, no deps, parentTask: 4)
+  delegate_task → task-6 (formatter, dependsOn: [5], parentTask: 4)
+  Goes idle within task session.
+
+task-5 completes → task-6 starts → task-6 completes
+  → all sub-tasks of task-4 done → task-4 auto-completes
+
+All tasks complete → resolver marks workflow complete → emits workflow_completed
+  → notify.ts wakes Atlas in user session with completion prompt
+  → Atlas reads workflow.md "on completion" instructions, responds to user on Telegram
+```
+
+**Why Drizzle ORM:**
+- TypeScript-first — schema in code, type-safe queries, autocomplete
+- Lightweight — thin wrapper over `better-sqlite3`, no engine binary (unlike Prisma)
+- Close to SQL — if you know SQL you know Drizzle. Can drop to raw SQL anytime
+- Zero runtime bloat — just imports, no code generation step
+- Auto-migrations on startup — `getDb()` applies unapplied SQL files from `dist/drizzle/`. Generated at dev time, shipped in the npm package.
+
+**Dependencies:** `drizzle-orm`, `better-sqlite3`, `@types/better-sqlite3` (dev)
+
+---
+
+#### Step 1: Directory restructure — agent-centric layout
+
+Move sessions and memory under each agent's directory. Update all path resolution.
+
+- [x] Define new path structure in `config.ts` — helper functions for resolving agent paths:
+  - `agentSessionPath(agentId, userId)` → `agents/{agentId}/sessions/users/{userId}/active.jsonl`
+  - `agentMemoryDir(agentId)` → `agents/{agentId}/memory/`
+  - `agentWorkflowSessionPath(agentId, name)` → `agents/{agentId}/sessions/workflows/{name}.jsonl`
+  - `agentTaskSessionPath(agentId, taskId)` → `agents/{agentId}/sessions/tasks/{taskId}.jsonl`
+- [x] Update `src/agent/history.ts` — use new session path helpers
+- [x] Update `src/tools/memory.ts` — memory path: `agents/{agentId}/memory/` (drop agent-id prefix from filenames)
+- [x] Update `src/agent/prompt.ts` — soul.md path stays same: `agents/{agentId}/soul.md`. Also loads `workflow.md` if present (appended to system prompt for managers)
+- [x] Update `src/scheduler/runner.ts` — job session path: `agents/{agentId}/sessions/jobs/{jobId}.jsonl`
+- [x] Update `src/cli.ts` init — minimal scaffolding, agent subdirs handled by `initWorkspace()` on boot
+- [x] Migrated manually — moved session and memory files to agent-centric layout, removed old dirs
+- [x] Update `src/workspace.ts` `initWorkspace()` — creates full agent-centric directory structure for all configured agents
+- [x] Update `src/config.ts` `ensureWorkspace()` — stripped to workspace root + template files only (no directory creation overlap with workspace.ts)
+
+---
+
+#### Step 2: SQLite + Drizzle ORM setup
+
+Add database infrastructure for workflow and task tracking.
+
+- [x] Install dependencies: `drizzle-orm`, `better-sqlite3`, `@types/better-sqlite3` (dev)
+- [x] Create `src/orchestrator/schema.ts` — Drizzle table definitions (workflows, tasks, task_deps, task_log)
+- [x] Create `src/orchestrator/db.ts` — database connection singleton:
+  - `getDb()` — lazy-init, opens `~/.openwren/data/workflows.db`
+  - On first access: create tables from schema if they don't exist (no migration files — just `CREATE TABLE IF NOT EXISTS`)
+  - Connection options: WAL mode for concurrent reads, foreign keys enabled
+  - Graceful close on SIGTERM/SIGINT (add to shutdown sequence in index.ts)
+  - `resetDb()` — drops and recreates all tables (dev convenience)
+- [x] `data/` and `teams/` directory creation in `initWorkspace()` (workspace.ts) and `cli.ts` init
+- [x] Verify: `npm run typecheck` passes, DB file created on first access (lazy)
+
+---
+
+#### Step 3: Team configuration
+
+Define team relationships in `openwren.json`. Add config parsing and validation.
+
+- [x] Add top-level team config keys:
+  - `teams.{name}.manager` — agent ID of the team manager
+  - `teams.{name}.members` — array of agent IDs in the team
+- [x] Add `agents.{id}.description` — one-liner describing what this agent does (shown to managers)
+- [x] Add `agents.{id}.role` — `"manager"` or `"worker"` (default: `"worker"`)
+- [x] Internal functions (not tools):
+  - `getTeamsForAgent(agentId)` — returns all teams this agent manages or belongs to
+  - `canDelegateTo(fromAgent, toAgent)` — validator, checks team membership (direct reports only)
+  - `getTeamFolder(teamName)` — returns `teams/{teamName}/` path
+  - `getTeamMembers(agentId)` — returns team members with descriptions for a manager
+- [x] Auto-inject team info into manager's system prompt when building prompt:
+  ```
+  ## Your Team
+  - lead-generator: Finds and qualifies sales leads
+  - copywriter: Writes personalized outreach copy
+  ```
+- [x] ~~`list_team` tool~~ — not needed. Team info is auto-injected into the system prompt on every message. No hot reload, so prompt is always current.
+- [x] Validate on startup — warn if team references unknown agent IDs
+- [x] Validate no circular references (A manages B manages A)
+- [x] Startup log: `[teams] alpha: atlas → lead-generator, copywriter, outreach-agent`
+- [x] Create team directories on boot: `teams/{teamName}/`
+
+---
+
+#### Step 4: Roles and permissions
+
+Each agent has a role. Each role defines which tools (permissions) the agent can use. Two default roles ship with OpenWren. Users can override defaults or create custom roles in `openwren.json`.
+
+- [x] Add `roles` to Config interface — `Record<string, string[]>` mapping role name to list of permitted tools
+- [x] Add default roles in `defaultConfig`: `manager` (5 tools) and `worker` (8 tools)
+- [x] User can override or create custom roles in `openwren.json` (same dot-notation pattern)
+- [x] Assign role to agent via `agents.{id}.role` — no role = all tools (backwards compatible)
+- [x] `getAgentPermissions(agentId)` — resolves role → tool list. Returns null if no role (all tools).
+- [x] `getToolDefinitions(agentId)` — filters tool definitions based on agent's role permissions
+- [x] Task context permissions: `log_progress` + `complete_task` stacked on top — deferred to Step 6/7 (tools don't exist yet)
+- [x] Validate on startup — warn if agent references unknown role
+- [x] Startup log: `[roles] atlas: manager (5 tools)`
+- [x] Add commented examples to `src/templates/openwren.json`
+- [x] New skill gates in `src/agent/skills.ts`:
+  - `requires.tools: [tool_name]` — skill only autoloads if agent has all listed tools in its role permissions. No role = all tools, so gate passes. Prevents skills from describing tools the agent can't use.
+  - `requires.role: [role_name]` — skill only autoloads if agent has one of the listed roles. Used for manager/worker skills.
+- [x] Split `file-operations` skill into two role-aware skills:
+  - `file-read` — autoload, gated on `requires.tools: [read_file]`. Sandbox rules, key paths, read_file usage.
+  - `file-write` — autoload, gated on `requires.tools: [write_file]`. Write_file usage, confirmation, protected paths. Manager agents don't get this (no `write_file` permission).
+- [x] New `manager` skill — autoload, gated on `requires.role: [manager]`. Teaches delegation patterns (sequential, parallel, fan-out/fan-in), delegate_task and query_workflow usage, team folder conventions. Does not mention workflow.md — workflow is already auto-injected into system prompt by prompt.ts.
+- [x] New `worker` skill — autoload, gated on `requires.tools: [log_progress, complete_task]`. Teaches progress reporting and task completion. Won't load until those tools are created in Step 7.
+- [x] `shell_exec` cwd changed from `agents/{agentId}/workspace/` to `~/.openwren/` — consistent with `read_file`/`write_file` base path. Shell is not truly sandboxed (agents can use absolute paths); path hardening deferred to Phase 12.
+
+---
+
+#### Step 5: Event bus — orchestration events
+
+Extend the typed event bus with task lifecycle events.
+
+- [x] Add event types to `src/events.ts`:
+  - `task_started` — { taskId, slug, workflowId, agentId }
+  - `task_completed` — { taskId, slug, workflowId, agentId, assignedBy, summary, deliverables? }
+  - `task_failed` — { taskId, slug, workflowId, agentId, assignedBy, error }
+  - `workflow_completed` — { workflowId, slug, managerAgentId, summary }
+- [x] Events are lightweight triggers — all state lives in SQLite
+- [x] Events trigger the orchestrator's dependency resolution logic (code, not LLM)
+- [x] Updated module doc — bus now serves both observational (WS) and orchestration (resolver/notify) purposes
+
+---
+
+#### Step 6: Orchestrator queue, runner, and dependency resolver
+
+Execution engine for tasks. Completely separate from the scheduler.
+
+- [x] Create `src/orchestrator/queue.ts` — task execution queue
+  - Independent from scheduler queue (different execution model)
+  - Per-agent FIFO queues — same agent's tasks run sequentially
+  - Cross-agent parallelism — researcher and analyst run simultaneously
+  - Tracks busy agents for status queries
+- [x] Create `src/orchestrator/resolver.ts` — dependency resolution (deterministic code)
+  - `onTaskCompleted()`: find dependent tasks, check if ALL deps met, return unblocked IDs
+  - `onTaskFailed()`: cascade-cancel dependents + child tasks (via parentTask and taskDeps)
+  - `checkWorkflowComplete()`: detect terminal state, mark workflow completed/failed
+  - Parent-task auto-completion: when all children (via parentTask) complete → auto-complete parent → recursively resolve
+  - Deadlock detection: log warning if blocked tasks exist with nothing queued or running
+  - `resolveReady()`: startup helper to unblock tasks whose deps are already met
+- [x] Create `src/orchestrator/runner.ts` — executes a single task
+  - Sets status → in_progress, emits task_started
+  - Creates task session: `agents/{agentId}/sessions/tasks/{slug}.jsonl`
+  - Runs agent loop with task prompt, quiet mode, skip maintenance
+  - Auto-complete fallback: if agent finishes without calling complete_task, auto-completes with reply text
+  - On failure: sets status → failed, emits task_failed
+- [x] Create `src/orchestrator/index.ts` — barrel exports + event wiring
+  - Singleton TaskQueue with executeTask processor
+  - Bus listeners: task_completed → resolver → enqueue unblocked; task_failed → resolver cascade
+  - `startOrchestrator()` / `stopOrchestrator()` lifecycle
+- [x] Add orchestrator start/stop to `src/index.ts` boot and shutdown sequence
+
+---
+
+#### Step 7: Orchestration tools
+
+Five new tools for workflow orchestration. No custom file tools — workers and managers use existing `read_file`/`write_file` with full paths. The manager learns the workflow folder path from `create_workflow` and passes it to workers in task prompts. Workers are only used within workflows (no Telegram/Discord bots for workers).
+
+Roles are explicit: `agents.atlas.role: "manager"`, `agents.researcher.role: "worker"`. No role = all tools (backwards compatible for agents not in any team).
+
+**7a. `create_workflow` tool (manager role only):**
+- [x] Create `src/tools/orchestrate.ts` — all orchestration tools in one file
+- [x] Tool input: `{ name }` — e.g. "Daily Project Report"
+- [x] Creates workflow row in DB
+- [x] Looks up which team the calling agent manages → creates team folder: `teams/{team}/{workflow-slug}/`
+- [x] Returns: `Workflow created. ID: 3, folder: teams/alpha/daily-project-report-2026-03-17-143022`
+- [x] Only top-level managers call this. Mid-level managers already have `workflowId` from `taskContext`
+
+**7b. `delegate_task` tool (manager role only):**
+- [x] Tool input: `{ workflowId, to, name, prompt, dependsOn? }`
+  - `workflowId`: required — from `create_workflow` return or from `taskContext.workflowId`
+  - `to`: agent ID to delegate to
+  - `name`: required — human-readable task name, used for slug generation (`{name}-{timestamp}`)
+  - `prompt`: the work order (include workflow folder path so workers know where to read/write)
+  - `dependsOn`: array of integer task IDs returned by previous `delegate_task` calls
+- [x] Validation: `canDelegateTo(currentAgent, to)` — reject if target not in team
+- [x] Validation: target agent has a soul.md
+- [x] If `taskContext` present, sets `parentTask` on new tasks (mid-level manager creating sub-tasks)
+- [x] Creates task row + task_deps rows
+- [x] Tasks without dependencies get status `queued` → picked up by queue immediately
+- [x] Tasks with unmet dependencies get status `blocked` → resolver unblocks when ready
+- [x] Returns: `Task created (queued/blocked). ID: 1`
+
+**7c. `query_workflow` tool (manager role only):**
+- [x] Tool input: `{ workflowId? | date? | status? }` — flexible query
+- [x] Queries SQLite: workflow + tasks + statuses + latest log entries per task
+- [x] Returns structured summary the LLM can relay to user
+- [x] Supports: "today's workflows", specific workflow, "all running"
+
+**7d. `log_progress` tool (task context only):**
+- [x] Tool input: `{ message }` — free-form progress update
+- [x] Inserts into `task_log` table (taskId from `taskContext`)
+- [x] No confirmation needed — lightweight, append-only
+- [x] Returns error if called without `taskContext`: "This tool can only be used during task execution."
+
+**7e. `complete_task` tool (task context only):**
+- [x] Tool input: `{ summary, deliverables? }` — what was accomplished
+- [x] Updates task row: status=completed, result_summary, deliverables, completed_at
+- [x] Emits `task_completed` on bus → triggers resolver for dependency chain
+- [x] Resolver checks if this unblocks dependent tasks → enqueues them
+- [x] Resolver checks if all workflow tasks done → workflow complete → deliver to user
+- [x] Returns error if called without `taskContext`
+
+**7f. Task context plumbing:**
+
+Tools like `complete_task`, `log_progress`, and `delegate_task` need to know which task is currently executing. The orchestrator runner knows this (it loaded the task from DB), but the tool handlers don't — they only receive `agentId`. `taskContext` threads this information from the runner through `runAgentLoop` into `executeTool` so tools can:
+- `complete_task` / `log_progress`: know which task ID to update in the DB
+- `delegate_task` (mid-level manager): read `workflowId` to add sub-tasks to the same workflow, and `taskId` to set `parentTask` on those sub-tasks for auto-completion
+
+- [x] Add `taskContext?: { taskId: number, workflowId: number, slug: string }` to `RunLoopOptions`
+- [x] Update `executeTool` signature: add optional `taskContext` parameter
+- [x] Update `runAgentLoop` to pass `opts.taskContext` through to `executeTool` calls
+- [x] Update orchestrator `runner.ts` to set `taskContext` in opts when calling `runAgentLoop`
+
+**7g. Tool registration in `src/tools/index.ts`:**
+- [x] Add all 5 orchestration tools to `allTools` array
+- [x] All gated by existing role permission system
+- [x] `log_progress`, `complete_task`: return error if called without `taskContext`
+
+**7h. Role updates in config defaults:**
+- [x] Manager: `create_workflow`, `delegate_task`, `query_workflow`, `read_file`, `write_file`, `save_memory`, `memory_search`
+- [x] Worker: `read_file`, `write_file`, `log_progress`, `complete_task`, `save_memory`, `memory_search`
+
+**7i. Workflow recovery on restart:**
+
+If the process crashes or restarts while workflows are running, in-memory queue state is lost. `startOrchestrator()` must recover by scanning the DB for running workflows and fixing stale task states.
+
+- [x] Query all workflows with `status: "running"`
+- [x] Tasks stuck as `in_progress`: mark as `failed` (process died mid-execution) → triggers normal failure cascade
+- [x] Tasks stuck as `queued`: re-enqueue into the TaskQueue (were in memory-only queue, now lost)
+- [x] Tasks stuck as `blocked` with all deps met: call existing `resolveReady()` per workflow → enqueue returned tasks
+- [x] Log recovery actions: `[orchestrator] Recovered workflow {slug}: {n} failed, {n} re-queued, {n} unblocked`
+- [x] Skip recovery if no running workflows found (common case — no log noise)
+
+---
+
+#### Step 8: Workflow notifications
+
+Deliver workflow events to the user via channel. Mechanical delivery only — no LLM wake-up. File structured with reserved section for future manager wake-up.
+
+- [x] Create `src/orchestrator/notify.ts` — structured in sections: user notifications, manager notifications (reserved), lifecycle
+- [x] Subscribe to `workflow_completed` on the bus:
+  - Look up `managerAgentId` from the event
+  - Resolve the first user in config (same pattern as scheduler delivery)
+  - Deliver summary via `deliverMessage()` — e.g. "✅ Workflow 'Daily Report' completed: [task summaries]"
+- [x] Subscribe to `task_failed` on the bus (original failures only, not cascade-cancellations):
+  - Deliver failure notice via `deliverMessage()` — e.g. "❌ Task 'research' failed: [error]. Workflow may be impacted."
+  - Distinguish original failures from cascades: original failure has a real error, cascades have status `cancelled`
+- [x] Append notifications to manager's user session (both completions and failures) — so the user can follow up conversationally and the manager agent has context
+- [x] `registerNotify()` / `unregisterNotify()` lifecycle — called from `startOrchestrator()` / `stopOrchestrator()`
+- [x] Resolver stays pure — no bus, no queue. `index.ts` keeps handler functions, bus subscriptions, and `recoverWorkflows()`. It's the wiring layer: subscribes to bus, calls resolver, enqueues results. Only `notify.ts` gets its own registration (self-contained)
+- [x] Manager wake-up for failures deferred to a future phase
+
+**Future ideas (no action needed now):**
+- Manager wake-up on failure — inject failure message into manager's workflow session, run a new agent loop turn so the LLM can decide: retry, skip, or abort
+- Per-task progress notifications — optionally notify user when individual tasks complete, not just the whole workflow
+- Notification channel preference — let users configure which channel receives workflow notifications (e.g. Telegram for failures, Discord for completions)
+- Workflow timeout — auto-fail workflows that haven't completed within a configurable duration
+- Retry policy — automatic retry of failed tasks with configurable max attempts and backoff
+
+---
+
+#### Step 9: Team folder management — SKIPPED
+
+Not needed for now. Folder creation already handled in `create_workflow` (Step 7a). Access is controlled by prompt convention — workers only access paths the manager provides in task prompts. No rogue agents to guard against. Auto-cleanup deferred — user can ask an agent to delete old folders or do it manually. Revisit if access control or retention becomes a real need.
+
+---
+
+#### Step 10: Manager skill
+
+Autoloaded skill for agents with manager tool profile. Teaches delegation patterns.
+
+- [x] Create `src/skills/manager/SKILL.md` — autoloaded for manager profile agents (done in Step 4)
+- [x] Skill content:
+  - How to read workflow.md and translate it into delegate_task calls
+  - How to declare dependencies between tasks
+  - How to write effective task prompts for sub-agents
+  - How to reference team folder paths for deliverables
+  - How to query workflow status and report to user
+  - Examples: sequential chain, parallel fan-out, fan-out then join, nested delegation
+  - Emphasis: you ONLY delegate. You never perform tasks directly. Your tools are for orchestration.
+- [x] Gate: requires `role: "manager"` in config
+
+---
+
+#### Step 10b: Sub-manager skill — context-aware skill loading
+
+Sub-managers (managers executing within a task context) need different instructions than top-level managers. A sub-manager should NOT call `create_workflow` — it should use `delegate_task` with the existing `workflowId` from its task context and write to the same team folder.
+
+- [x] Pass `taskContext` to `loadSystemPrompt()` in `src/agent/prompt.ts`
+- [x] Pass `opts?.taskContext` through from `runAgentLoop()` in `src/agent/loop.ts`
+- [x] Update skill gating in `src/agent/skills.ts` to support `requires.delegated` (true = only when delegated, false = only when independent)
+- [x] Update `src/skills/manager/SKILL.md` — add `requires.delegated: false` so it only loads for top-level managers
+- [x] Create `src/skills/sub-manager/SKILL.md` — autoloaded, gated on `requires.role: manager` + `requires.delegated: true`
+- [x] Typecheck
+- [x] Inject `## Task Context` section into system prompt when `taskContext` exists — shows workflowId, taskId, slug so the LLM knows its context values
+- [x] Code-level safety net: `delegate_task` forces `taskContext.workflowId` when taskContext exists, ignoring LLM input
+- [x] Update sub-manager skill to reference the Task Context section instead of claiming "provided automatically"
+- [x] Remove mid-manager references from manager skill (dead text since skill split)
+- [x] Remove `create_workflow` from tool list when agent has taskContext (hard enforcement)
+
+---
+
+#### Step 11: Integration testing — "Project Report" scenario
+
+All-local test using file read/write only. No external APIs, no shell commands, no web access.
+
+**Test agents (7 total, minimal soul files):**
+
+| Agent | Profile | Team | Soul (one-liner) |
+|---|---|---|---|
+| atlas | manager | alpha (manager) | "You are a project manager. You only delegate work to your team." |
+| researcher | worker | alpha (member) | "You read documents and write concise summaries." |
+| analyst | worker | alpha (member) | "You read documents and extract action items as bullet lists." |
+| writer | worker | alpha (member) | "You combine source materials into formatted markdown reports." |
+| editor | manager | alpha (member) + editing (manager) | "You manage the editing team. You only delegate editing tasks." |
+| spellchecker | worker | editing (member) | "You fix spelling and grammar errors in documents." |
+| formatter | worker | editing (member) | "You add proper markdown headings, structure, and formatting." |
+
+**Config:**
+```json5
+{
+  "teams.alpha.manager": "atlas",
+  "teams.alpha.members": ["researcher", "analyst", "writer", "editor"],
+  "teams.editing.manager": "editor",
+  "teams.editing.members": ["spellchecker", "formatter"],
+
+  "agents.atlas.role": "manager",
+  "agents.atlas.description": "Project manager, orchestrates the report pipeline",
+  "agents.researcher.description": "Reads documents and writes summaries",
+  "agents.analyst.description": "Reads documents and extracts action items",
+  "agents.writer.description": "Writes formatted reports from source material",
+  "agents.editor.role": "manager",
+  "agents.editor.description": "Manages the editing team for review and polish",
+  "agents.spellchecker.description": "Fixes spelling and grammar errors",
+  "agents.formatter.description": "Adds proper markdown structure and headings",
+}
+```
+
+**Seed files (create before testing):**
+
+Seed files go in `agents/atlas/workspace/` — a static location any agent can read. Workers write outputs to the workflow team folder (path provided by manager in task prompts).
+
+```
+agents/atlas/workspace/
+├── notes-project.md    ← "Project X launched on March 1. Revenue target: 50k. Current MRR: 12k."
+├── notes-feedback.md   ← "Users report login page is slow (3s load). Mobile app crashes on Android 14. Dark mode requested by 40% of users."
+└── notes-roadmap.md    ← "Q2 priorities: fix login performance, Android 14 crash, ship dark mode. Stretch goal: API v2."
+```
+
+**Atlas's workflow.md:**
+```markdown
+## Daily Project Report Pipeline
+
+1. Delegate to researcher: read all notes-*.md files in agents/atlas/workspace/ and write a summary to research-summary.txt in the team folder
+2. Delegate to analyst: read all notes-*.md files in agents/atlas/workspace/ and extract action items to action-items.txt in the team folder
+3. Both run in parallel. No dependencies between them.
+4. Delegate to writer: combine research-summary.txt and action-items.txt from the team folder into draft-report.md. Depends on tasks 1 and 2.
+5. Delegate to editor: review and finalize draft-report.md from the team folder. Depends on task 4.
+```
+
+**Editor's workflow.md:**
+```markdown
+## Editing Pipeline
+
+1. Delegate to spellchecker: fix spelling/grammar in draft-report.md, save as corrected.md in the team folder
+2. Delegate to formatter: add proper structure and headings to corrected.md, save as final-report.md in the team folder. Depends on task 1.
+```
+
+**Expected DAG (created by Atlas):**
+```
+task-001: researcher (no deps)        ──→ task-003: writer (dependsOn: [001, 002])
+task-002: analyst (no deps, parallel) ──↗                    ↓
+                                           task-004: editor (dependsOn: [003])
+```
+
+**Expected sub-DAG (created by Editor when task-004 starts):**
+```
+task-005: spellchecker (no deps, parentTask: 004)
+task-006: formatter (dependsOn: [005], parentTask: 004)
+```
+
+**Test cases:**
+
+1. **Setup:**
+   - [x] Create soul.md for all 7 agents
+   - [x] Create workflow.md for atlas and editor
+   - [x] Create 3 seed files in `agents/atlas/workspace/`
+   - [x] Add team config + tool profiles to openwren.json
+   - [x] Restart OpenWren, verify startup logs show teams and profiles
+
+2. **Trigger workflow via Telegram:**
+   - [x] Send to Atlas: "Run the daily project report"
+   - [x] Verify Atlas creates 4 tasks with correct dependencies
+   - [x] Check DB: workflow row exists, 4 task rows, task_deps correct
+   - [x] Check logs: researcher and analyst start immediately (parallel)
+
+3. **Parallel execution (level 1):**
+   - [x] Verify researcher writes `research-summary.txt` to team folder
+   - [x] Verify analyst writes `action-items.txt` to team folder
+   - [x] Check DB: researcher and analyst → completed
+   - [x] Verify resolver unblocks writer after both complete
+
+4. **Sequential dependency:**
+   - [x] Verify writer starts only after both researcher and analyst complete
+   - [x] Writer reads research-summary.txt + action-items.txt, writes `draft-report.md`
+   - [x] Verify resolver unblocks editor
+
+5. **Multi-level — editor creates sub-DAG, auto-completion:**
+   - [x] Editor wakes up in its task session
+   - [x] Editor reads its workflow.md, creates 2 sub-tasks with dependency formatter→spellchecker
+   - [ ] Check DB: sub-tasks in correct workflow (was broken — editor used wrong workflowId, now fixed)
+   - [x] Spellchecker runs, writes `corrected.md` to team folder
+   - [ ] Formatter runs after spellchecker, writes `final-report.md` to team folder (was blocked due to wrong workflowId)
+   - [x] Resolver detects all sub-tasks done → auto-completes editor's task
+   - [x] Editor was NOT woken up — no extra LLM call
+
+6. **Workflow completion:**
+   - [x] Workflow row → status: completed
+   - [x] Atlas woken by notify.ts, delivers concise response to user on Telegram
+   - [x] All deliverables in single team folder (no separate editing folder)
+
+7. **Status query mid-execution:**
+   - [ ] Not tested yet — need a clean run to test mid-execution queries
+
+8. **Unrelated message during workflow:**
+   - [ ] While workflow runs, send Atlas: "What time is it?"
+   - [ ] Atlas responds normally from user session
+   - [ ] Workflow continues unaffected in its own session
+
+9. **Task failure:**
+   - [ ] Temporarily break one agent's soul file (empty it) to cause a failure
+   - [ ] Verify: failed task → DB status: failed
+   - [ ] Verify: child tasks cancelled via parentTask cascade
+   - [ ] Verify: Atlas gets failure notification, reports to user
+
+10. **Visibility scoping:**
+    - [ ] Verify: editor cannot delegate to researcher (not in editing team)
+    - [ ] Verify: spellchecker has no delegate_task tool (worker profile)
+    - [ ] Verify: atlas cannot delegate to spellchecker (not in alpha team)
+
+11. **DB verification (after full run):**
+    - [ ] Open `~/.openwren/data/workflows.db` with sqlite3 CLI
+    - [ ] `SELECT * FROM workflows` — one row, status=completed
+    - [ ] `SELECT * FROM tasks ORDER BY created_at` — 6 rows, all completed
+    - [ ] `SELECT * FROM task_deps` — 4 rows: (003→001), (003→002), (004→003), (006→005)
+    - [ ] `SELECT * FROM task_log` — progress entries from workers
+    - [ ] Verify parentTask: task-005 and task-006 have parentTask=004
+
+---
+
+**New dependencies:** `drizzle-orm`, `better-sqlite3`, `@types/better-sqlite3` (dev)
+
+**Files created:**
+- `src/orchestrator/schema.ts` — Drizzle table definitions
+- `src/orchestrator/db.ts` — SQLite connection singleton
+- `src/orchestrator/queue.ts` — task execution queue
+- `src/orchestrator/resolver.ts` — dependency resolution logic
+- `src/orchestrator/runner.ts` — task executor
+- `src/orchestrator/notify.ts` — manager notification on completion/failure
+- `src/orchestrator/index.ts` — barrel exports
+- `src/tools/orchestrate.ts` — delegate_task, query_workflow, log_progress, complete_task
+- `src/skills/manager/SKILL.md` — manager delegation skill
+
+**Files modified:**
+- `src/agent/history.ts` — new session path resolution
+- `src/agent/prompt.ts` — loads workflow.md, injects team info for managers
+- `src/tools/memory.ts` — agent-centric memory paths
+- `src/tools/filesystem.ts` — team folder access rules
+- `src/tools/index.ts` — register orchestration tools, filter by tool profile
+- `src/config.ts` — team config, tool profiles, path helpers, ensureWorkspace
+- `src/cli.ts` — init creates new directory structure + data/ + teams/ dirs
+- `src/events.ts` — new event types
+- `src/index.ts` — orchestrator startup/shutdown, DB lifecycle
+
 ### Phase 10 — Web UI (Dashboard)
 
 A local browser dashboard at `http://127.0.0.1:3000`. Connects to Phase 4 WebSocket gateway. Opened via `openwren dashboard`.
@@ -390,6 +1078,7 @@ WhatsApp support via `@whiskeysockets/baileys`. Unofficial, reverse-engineers Wh
 - [ ] Logging and usage tracking (token counts, cost per message)
 - [ ] Docker + `docker-compose` for VPS deployment
 - [ ] **File access sandbox review** — consider configurable `allowedPaths` so agent can access directories outside workspace without full shell access
+- [ ] **Shell path hardening** — validate that shell command arguments resolve inside the workspace before execution. Currently cwd is set to `~/.openwren/` but agents can escape via absolute paths (`ls /etc`) or relative paths (`cat ../../`). Needs per-command path argument validation.
 - [ ] **Shell command whitelist review** — make whitelist configurable via `openwren.json` so users can add/remove commands without touching code
 - [ ] **`reloadEnv()` / `reloadConfig()`** — hot-reload `.env` and `openwren.json` without restart. Needed when agents can self-modify (install skills, add API keys). Keep env data in a refreshable module-level map so reload is a one-function change
 - [ ] **Exact token tracking** — replace character ÷ 4 estimates with exact input/output token counts from Anthropic API `usage` field in responses. Apply to session compaction estimates, run history logging, and future usage dashboard

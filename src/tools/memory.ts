@@ -1,29 +1,33 @@
 import * as fs from "fs";
 import * as path from "path";
-import { config } from "../config";
+import { agentMemoryDir } from "../config";
 import type { ToolDefinition } from "../providers";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function memoryDir(): string {
-  return path.join(config.workspaceDir, "memory");
+function memoryDir(agentId: string): string {
+  return agentMemoryDir(agentId);
 }
 
-function memoryFilePath(key: string): string {
+function memoryFilePath(agentId: string, key: string): string {
   // Sanitize key — only allow alphanumerics, hyphens, underscores
   const safeKey = key.replace(/[^a-zA-Z0-9\-_]/g, "_");
-  return path.join(memoryDir(), `${safeKey}.md`);
+  return path.join(memoryDir(agentId), `${safeKey}.md`);
 }
 
 // ---------------------------------------------------------------------------
 // save_memory
 // ---------------------------------------------------------------------------
 
-export async function saveMemory(key: string, content: string): Promise<string> {
+export async function saveMemory(agentId: string, key: string, content: string): Promise<string> {
   try {
-    const filePath = memoryFilePath(key);
+    const dir = memoryDir(agentId);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const filePath = memoryFilePath(agentId, key);
     fs.writeFileSync(filePath, content, "utf-8");
     return `Memory saved: ${key} (${content.length} chars)`;
   } catch (err: unknown) {
@@ -36,9 +40,10 @@ export async function saveMemory(key: string, content: string): Promise<string> 
 // memory_search
 // ---------------------------------------------------------------------------
 
-export async function searchMemory(query: string): Promise<string> {
+export async function searchMemory(agentId: string, query: string): Promise<string> {
   try {
-    const dir = memoryDir();
+    const dir = memoryDir(agentId);
+    if (!fs.existsSync(dir)) return "No memory files found.";
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
 
     if (files.length === 0) {
@@ -91,14 +96,13 @@ export const saveMemoryToolDefinition: ToolDefinition = {
   description:
     "Save information to persistent memory. Survives session resets and restarts. " +
     "Use this for facts, preferences, project context, or anything worth remembering long-term. " +
-    "Saving to the same key overwrites the previous value — use this to update a memory. " +
-    "Prefix keys with your agent name to avoid collisions (e.g. atlas-user-prefs).",
+    "Saving to the same key overwrites the previous value — use this to update a memory.",
   input_schema: {
     type: "object",
     properties: {
       key: {
         type: "string",
-        description: "Unique identifier for this memory (e.g. atlas-user-prefs, atlas-projects). Use hyphens, no spaces.",
+        description: "Unique identifier for this memory (e.g. user-prefs, projects). Use hyphens, no spaces.",
       },
       content: {
         type: "string",

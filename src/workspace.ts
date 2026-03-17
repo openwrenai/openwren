@@ -7,29 +7,30 @@ import { config } from "./config";
  * Called once at startup. Safe to call multiple times.
  *
  * ~/.openwren/
- * ├── sessions/
- * │   ├── {userId}/          ← one per user in config
- * │   │   ├── atlas/          ← one per agent
- * │   │   ├── einstein/
- * │   │   ├── wizard/
- * │   │   └── jobs/           ← isolated job sessions ({jobId}.jsonl)
- * │   └── local/             ← scratch/dev sessions
- * │       ├── main/
- * │       └── ...
- * ├── memory/
+ * ├── data/                   ← SQLite databases
+ * ├── teams/                  ← shared team folders
  * ├── schedules/
- * │   ├── jobs.json           ← all scheduled jobs (loaded into memory on startup)
- * │   └── runs/               ← run history JSONL per job
+ * │   ├── jobs.json
+ * │   └── runs/
  * └── agents/
- *     └── atlas/
+ *     └── {agentId}/
  *         ├── soul.md
- *         └── heartbeat.md   ← optional heartbeat checklist
+ *         ├── workflow.md     ← optional, for managers
+ *         ├── heartbeat.md   ← optional
+ *         ├── workspace/
+ *         ├── memory/
+ *         ├── skills/
+ *         └── sessions/
+ *             ├── users/{userId}/active.jsonl
+ *             ├── jobs/
+ *             ├── workflows/
+ *             └── tasks/
  */
 export function initWorkspace(): void {
   const dirs = [
     config.workspaceDir,
-    path.join(config.workspaceDir, "sessions"),
-    path.join(config.workspaceDir, "memory"),
+    path.join(config.workspaceDir, "data"),
+    path.join(config.workspaceDir, "teams"),
     path.join(config.workspaceDir, "agents"),
     path.join(config.workspaceDir, "skills"),
     path.join(config.workspaceDir, "schedules"),
@@ -43,26 +44,9 @@ export function initWorkspace(): void {
     }
   }
 
-  // Create session directories for each user + agent combo
-  const userIds = [...Object.keys(config.users), "local"]; // "local" for scratch sessions
-  const agentIds = Object.keys(config.agents);
+  // Ensure every configured agent has a soul.md and agent-centric directory structure
+  const userIds = [...Object.keys(config.users), "local"];
 
-  for (const userId of userIds) {
-    // Create jobs directory for isolated job sessions
-    const jobsDir = path.join(config.workspaceDir, "sessions", userId, "jobs");
-    if (!fs.existsSync(jobsDir)) {
-      fs.mkdirSync(jobsDir, { recursive: true });
-    }
-
-    for (const agentId of agentIds) {
-      const sessionDir = path.join(config.workspaceDir, "sessions", userId, agentId);
-      if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-      }
-    }
-  }
-
-  // Ensure every configured agent has a soul.md
   for (const [agentId, agentConfig] of Object.entries(config.agents)) {
     const agentDir = path.join(config.workspaceDir, "agents", agentId);
     const soulPath = path.join(agentDir, "soul.md");
@@ -72,9 +56,35 @@ export function initWorkspace(): void {
       console.log(`Created agent directory: ${agentDir}`);
     }
 
+    // Create agent subdirectories
+    const subdirs = [
+      path.join(agentDir, "memory"),
+      path.join(agentDir, "workspace"),
+      path.join(agentDir, "sessions", "jobs"),
+      path.join(agentDir, "sessions", "workflows"),
+      path.join(agentDir, "sessions", "tasks"),
+    ];
+    // Create user session dirs for each configured user
+    for (const userId of userIds) {
+      subdirs.push(path.join(agentDir, "sessions", "users", userId));
+    }
+    for (const dir of subdirs) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+
     if (!fs.existsSync(soulPath)) {
       fs.writeFileSync(soulPath, defaultSoul(agentId, agentConfig.name));
       console.log(`Created default soul file: ${soulPath}`);
+    }
+  }
+
+  // Create team directories
+  for (const teamName of Object.keys(config.teams)) {
+    const teamDir = path.join(config.workspaceDir, "teams", teamName);
+    if (!fs.existsSync(teamDir)) {
+      fs.mkdirSync(teamDir, { recursive: true });
     }
   }
 }

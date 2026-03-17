@@ -6,6 +6,9 @@ import { initWorkspace } from "./workspace";
 import { startGateway, app } from "./gateway/server";
 import { startChannels, stopChannels, setSchedulerStatusProvider } from "./channels";
 import { startScheduler, stopScheduler, getSchedulerStatus } from "./scheduler";
+import { closeDb } from "./orchestrator/db";
+import { startOrchestrator, stopOrchestrator } from "./orchestrator";
+import { validateTeams } from "./config";
 
 // ---------------------------------------------------------------------------
 // Timestamped logging — prepend [YYYY-MM-DD HH:MM:SS] to all console output.
@@ -59,13 +62,21 @@ async function main() {
   // the in-memory job state is initialized before any status requests arrive)
   setSchedulerStatusProvider(getSchedulerStatus);
 
+  // Start orchestrator — subscribes to task lifecycle events on the bus
+  startOrchestrator();
+
+  // Log team configuration (after all services started)
+  validateTeams();
+
   // Register graceful shutdown — triggered by `openwren stop` (SIGTERM)
   // or Ctrl+C in foreground mode (SIGINT).
   const shutdown = async (signal: string) => {
     console.log(`\n[boot] Received ${signal}, shutting down...`);
+    stopOrchestrator();
     stopScheduler(); // Cancel all timers before closing channels
     await stopChannels();
     if (app) await app.close();
+    closeDb();
 
     // Clean up PID file if it exists (daemon mode)
     const pidFile = path.join(config.workspaceDir, "openwren.pid");

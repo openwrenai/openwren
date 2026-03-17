@@ -1,13 +1,13 @@
 /**
  * Typed Event Bus
  *
- * Purely observational event system for cross-channel visibility.
- * Channels emit events as side effects alongside their normal operation —
- * the bus does NOT mediate between channels and the agent loop.
+ * Event system serving two purposes:
+ * 1. Cross-channel visibility — channels emit events as side effects,
+ *    WS clients subscribe for live status (CLI, Web UI).
+ * 2. Orchestration triggers — task/workflow events drive the dependency
+ *    resolver and notification system (code, not LLM).
  *
- * Primary consumer: WebSocket clients (CLI, Web UI) subscribe to the bus
- * to receive a live stream of everything happening across all channels.
- *
+ * Events are lightweight triggers — all state lives in SQLite or JSONL.
  * The agent loop is completely unaware of this module.
  */
 
@@ -109,6 +109,48 @@ export interface ScheduleErrorEvent {
   timestamp: number;
 }
 
+/** A task began executing — runner picked it up from the queue. */
+export interface TaskStartedEvent {
+  taskId: number;
+  slug: string;
+  workflowId: number;
+  agentId: string;
+  timestamp: number;
+}
+
+/** A task completed successfully — agent called complete_task or auto-completed. */
+export interface TaskCompletedEvent {
+  taskId: number;
+  slug: string;
+  workflowId: number;
+  agentId: string;
+  assignedBy: string;   // manager agent that delegated this task
+  summary: string;
+  deliverables?: string; // comma-separated file paths or description
+  timestamp: number;
+}
+
+/** A task failed — agent loop crashed or returned an error. */
+export interface TaskFailedEvent {
+  taskId: number;
+  slug: string;
+  workflowId: number;
+  agentId: string;
+  assignedBy: string;
+  error: string;
+  timestamp: number;
+}
+
+/** All tasks in a workflow completed — the entire DAG is done. */
+export interface WorkflowCompletedEvent {
+  workflowId: number;
+  slug: string;
+  name: string;
+  managerAgentId: string;
+  summary: string;
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Event map — ties event names to their payload types for compile-time safety
 // ---------------------------------------------------------------------------
@@ -123,6 +165,10 @@ export interface BusEvents {
   confirm_request: ConfirmRequestEvent;
   schedule_run: ScheduleRunEvent;
   schedule_error: ScheduleErrorEvent;
+  task_started: TaskStartedEvent;
+  task_completed: TaskCompletedEvent;
+  task_failed: TaskFailedEvent;
+  workflow_completed: WorkflowCompletedEvent;
 }
 
 export type BusEventName = keyof BusEvents;
