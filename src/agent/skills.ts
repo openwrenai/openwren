@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
-import { config, BUNDLED_SKILLS_DIR } from "../config";
+import { config, BUNDLED_SKILLS_DIR, getAgentPermissions } from "../config";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -11,8 +11,11 @@ import { config, BUNDLED_SKILLS_DIR } from "../config";
 interface SkillRequires {
   env: string[];
   bins: string[];
-  os: string; // "" means any platform
+  os: string;      // "" means any platform
   config: string[]; // dot-notation config keys that must be set and truthy
+  tools: string[];  // tool names that must be in the agent's permissions
+  role: string[];   // agent must have one of these roles
+  delegated: boolean | null;  // true = only when agent is running a delegated task, false = only when independent, null = don't care
 }
 
 interface ParsedSkill {
@@ -191,6 +194,9 @@ function extractSkill(
       bins: Array.isArray(requires.bins) ? requires.bins : [],
       os: typeof requires.os === "string" ? requires.os : "",
       config: Array.isArray(requires.config) ? requires.config : [],
+      tools: Array.isArray(requires.tools) ? requires.tools : [],
+      role: Array.isArray(requires.role) ? requires.role : [],
+      delegated: requires.delegated === true ? true : requires.delegated === false ? false : null,
     },
     body,
     filePath,
@@ -205,7 +211,7 @@ function extractSkill(
 // still rebuilt in full — quiet only affects logging, not behaviour.
 // ---------------------------------------------------------------------------
 
-function passesGates(skill: ParsedSkill, quiet = false): boolean {
+function passesGates(skill: ParsedSkill, agentId: string, quiet = false, hasTaskContext = false): boolean {
   // 1. Frontmatter enabled check
   if (!skill.enabled) {
     if (!quiet) console.log(`[skills] ${skill.name}: disabled in frontmatter`);
@@ -234,7 +240,40 @@ function passesGates(skill: ParsedSkill, quiet = false): boolean {
     }
   }
 
-  // 5. Env gate — process.env includes .env loaded by dotenv at boot
+  // 5. Role gate — agent must have one of the listed roles
+  if (skill.requires.role.length > 0) {
+    const agentRole = config.agents[agentId]?.role;
+    if (!agentRole || !skill.requires.role.includes(agentRole)) {
+      if (!quiet) console.log(`[skills] ${skill.name}: requires role ${skill.requires.role.join("|")} — agent has ${agentRole || "none"}`);
+      return false;
+    }
+  }
+
+  // 6. Delegation gate — load only when agent is delegated or independent
+  if (skill.requires.delegated === true && !hasTaskContext) {
+    if (!quiet) console.log(`[skills] ${skill.name}: requires delegated=true — agent is not running a delegated task`);
+    return false;
+  }
+  if (skill.requires.delegated === false && hasTaskContext) {
+    if (!quiet) console.log(`[skills] ${skill.name}: requires delegated=false — agent is running a delegated task`);
+    return false;
+  }
+
+  // 7. Tools gate — agent must have all listed tools in its permissions
+  if (skill.requires.tools.length > 0) {
+    const permissions = getAgentPermissions(agentId);
+    // null permissions = no role = all tools available, so all tool gates pass
+    if (permissions) {
+      for (const tool of skill.requires.tools) {
+        if (!permissions.includes(tool)) {
+          if (!quiet) console.log(`[skills] ${skill.name}: requires tool ${tool} — not in agent's role permissions`);
+          return false;
+        }
+      }
+    }
+  }
+
+  // 8. Env gate — process.env includes .env loaded by dotenv at boot
   for (const key of skill.requires.env) {
     if (!process.env[key]) {
       if (!quiet) console.log(`[skills] ${skill.name}: requires env ${key} — not set`);
@@ -242,7 +281,7 @@ function passesGates(skill: ParsedSkill, quiet = false): boolean {
     }
   }
 
-  // 6. Binary gate (most expensive — spawns subprocess)
+  // 9. Binary gate (most expensive — spawns subprocess)
   for (const bin of skill.requires.bins) {
     if (!isBinaryAvailable(bin)) {
       if (!quiet) console.log(`[skills] ${skill.name}: requires binary ${bin} — not found`);
@@ -332,7 +371,7 @@ function resolvePath(raw: string): string {
  *
  * quiet=true suppresses per-skill log lines (used by scheduled job runner).
  */
-export function buildSkillCatalog(agentId: string, quiet = false): SkillLoadResult {
+export function buildSkillCatalog(agentId: string, quiet = false, hasTaskContext = false): SkillLoadResult {
   // Scan in reverse precedence order — later entries overwrite earlier ones
   const seen = new Map<string, ParsedSkill>();
 
@@ -366,7 +405,7 @@ export function buildSkillCatalog(agentId: string, quiet = false): SkillLoadResu
   const agentCache = new Map<string, ParsedSkill>();
 
   for (const skill of seen.values()) {
-    if (!passesGates(skill, quiet)) continue;
+    if (!passesGates(skill, agentId, quiet, hasTaskContext)) continue;
 
     if (skill.autoload) {
       autoloaded.push({ name: skill.name, body: skill.body });

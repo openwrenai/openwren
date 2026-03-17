@@ -1,7 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import { config, AgentConfig } from "../config";
+import { config, AgentConfig, getTeamMembers } from "../config";
 import { buildSkillCatalog } from "./skills";
+import type { TaskContext } from "./loop";
 
 /**
  * Loads the soul file for the given agent from disk on every call.
@@ -15,7 +16,7 @@ import { buildSkillCatalog } from "./skills";
  * quiet=true suppresses per-skill log lines forwarded to buildSkillCatalog().
  * Pass true when called from a scheduled job runner.
  */
-export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig, quiet = false): string {
+export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig, quiet = false, taskContext?: TaskContext): string {
   const soulPath = path.join(
     config.workspaceDir,
     "agents",
@@ -32,8 +33,26 @@ export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig, quie
 
   const soul = fs.readFileSync(soulPath, "utf-8").trim();
 
+  // Load workflow.md if present (manager agents)
+  const workflowPath = path.join(
+    config.workspaceDir,
+    "agents",
+    agentId,
+    "workflow.md"
+  );
+  const workflowSection = fs.existsSync(workflowPath)
+    ? "\n\n---\n\n## Workflow\n\n" + fs.readFileSync(workflowPath, "utf-8").trim()
+    : "";
+
+  // Inject team info for manager agents
+  const teamMembers = getTeamMembers(agentId);
+  const teamSection = teamMembers.length > 0
+    ? "\n\n---\n\n## Your Team\n\n" +
+      teamMembers.map(m => `- **${m.id}**: ${m.description}`).join("\n")
+    : "";
+
   // Build skill catalog for this agent
-  const { catalog, autoloaded } = buildSkillCatalog(agentId, quiet);
+  const { catalog, autoloaded } = buildSkillCatalog(agentId, quiet, !!taskContext);
 
   // Autoloaded skill bodies — injected directly, no load_skill call needed.
   // Each is wrapped with a clear header so the agent knows its name and origin.
@@ -58,15 +77,21 @@ export function loadSystemPrompt(agentId: string, agentConfig: AgentConfig, quie
       ].join("\n")
     : "";
 
-  // Runtime context — always appended last
-  const runtimeContext = [
-    ``,
-    ``,
-    `---`,
-    `## Runtime`,
-    `Your name is ${agentConfig.name}.`,
-    `Today is ${new Date().toDateString()}.`,
-  ].join("\n");
+  // Inject task context for agents running inside a delegated task
+  const taskContextSection = taskContext
+    ? [
+        "",
+        "",
+        "---",
+        "",
+        "## Task Context",
+        "",
+        `You are executing **task ${taskContext.taskId}** in **workflow ${taskContext.workflowId}**.`,
+        `Task slug: ${taskContext.slug}`,
+        `Assigned by: ${taskContext.assignedBy}`,
+        `Use workflow ID **${taskContext.workflowId}** when calling delegate_task.`,
+      ].join("\n")
+    : "";
 
-  return soul + autoloadedSection + catalogSection + runtimeContext;
+  return soul + workflowSection + teamSection + taskContextSection + autoloadedSection + catalogSection;
 }

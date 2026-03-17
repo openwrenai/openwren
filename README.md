@@ -276,6 +276,47 @@ If the agent has nothing to report, it stays silent (HEARTBEAT_OK suppression).
 
 ---
 
+## Teams & Workflows
+
+Agents can form teams with manager-worker relationships. A manager agent creates a full DAG (directed acyclic graph) of tasks with declared dependencies, then a deterministic orchestrator executes it — no LLM involved in dependency resolution or scheduling.
+
+**How it works:**
+
+1. You tell your manager agent (e.g. Atlas) to run a workflow — "Run the daily project report"
+2. Atlas reads its `workflow.md`, creates all tasks with dependencies in one shot, then goes idle
+3. The orchestrator resolves dependencies, runs tasks in parallel where possible, and handles failures
+4. Workers execute in isolated task sessions — your conversation with Atlas stays clean
+5. When done, Atlas delivers a summary back to your channel
+
+**Key features:**
+
+- **DAG-first** — the entire task graph is planned upfront, then executed mechanically. No LLM in the loop for scheduling
+- **Multi-level hierarchy** — a mid-level manager (both worker and manager) creates its own sub-DAG when its task starts. Sub-DAGs roll up into the parent workflow
+- **Parallel execution** — independent tasks run concurrently. Dependent tasks wait until their prerequisites complete
+- **Shared team folders** — all team members write deliverables to `~/.openwren/teams/{team}/{workflow-slug}/`
+- **Tool profiles** — managers get delegation tools, workers get execution tools (shell, files, fetch, search). Enforced at the tool level, not just in the prompt
+- **SQLite state** — all workflow and task state lives in `~/.openwren/data/workflows.db` via Drizzle ORM
+
+**Config example:**
+
+```json5
+{
+  // Define a team
+  "teams.alpha.manager": "atlas",
+  "teams.alpha.members": ["researcher", "analyst", "writer", "editor"],
+
+  // Agent roles and descriptions (shown to managers via system prompt)
+  "agents.researcher.description": "Gathers information and produces research summaries",
+  "agents.researcher.role": "worker",
+  "agents.editor.description": "Reviews and polishes written content",
+  "agents.editor.role": "worker",
+}
+```
+
+Each team member needs a `soul.md` in `~/.openwren/agents/{name}/`. Managers also get a `workflow.md` that describes their orchestration logic — what tasks to create, in what order, with what dependencies.
+
+---
+
 ## Security
 
 Open Wren treats all inbound web content as potentially adversarial. Three layers of defense protect agents from prompt injection:

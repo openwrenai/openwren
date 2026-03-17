@@ -491,14 +491,15 @@ function cmdInit(args: string[]): void {
     process.exit(1);
   }
 
-  // 1. Create directory structure
+  // 1. Create directory structure — minimal scaffolding only.
+  // Agent-specific dirs (sessions, memory, workspace) are created by
+  // initWorkspace() on first boot, based on agents defined in config.
   const dirs = [
     WORKSPACE,
-    path.join(WORKSPACE, "sessions"),
-    path.join(WORKSPACE, "memory"),
+    path.join(WORKSPACE, "data"),
+    path.join(WORKSPACE, "teams"),
     path.join(WORKSPACE, "agents"),
     path.join(WORKSPACE, "agents", "atlas"),
-    path.join(WORKSPACE, "agents", "atlas", "workspace"),
   ];
 
   for (const dir of dirs) {

@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "../providers";
+import type { TaskContext } from "../agent/loop";
 import { shellToolDefinition, listShellCommandsToolDefinition, executeShell, listShellCommands, parseCommand } from "./shell";
 import { readFileToolDefinition, writeFileToolDefinition, readFile, writeFile } from "./filesystem";
 import { saveMemoryToolDefinition, searchMemoryToolDefinition, saveMemory, searchMemory } from "./memory";
@@ -6,8 +7,14 @@ import { loadSkillToolDefinition, loadSkill } from "./skills";
 import { searchWebToolDefinition, searchWeb } from "./search";
 import { fetchUrlToolDefinition, fetchUrl } from "./fetch";
 import { manageScheduleToolDefinition, manageSchedule } from "./schedule";
+import {
+  createWorkflowToolDefinition, delegateTaskToolDefinition, queryWorkflowToolDefinition,
+  logProgressToolDefinition, completeTaskToolDefinition,
+  createWorkflow, delegateTask, queryWorkflow, logProgress, completeTask,
+} from "./orchestrate";
 import { isApproved, permanentlyApprove } from "./approvals";
 import { classifyCommand, getSecurity, isProtectedWrite } from "../security";
+import { getAgentPermissions } from "../config";
 
 // ---------------------------------------------------------------------------
 // Confirm function type
@@ -50,30 +57,70 @@ async function confirmWithTimeout(
 // Tool registry
 // ---------------------------------------------------------------------------
 
-export function getToolDefinitions(): ToolDefinition[] {
-  return [
-    shellToolDefinition,
-    listShellCommandsToolDefinition,
-    readFileToolDefinition,
-    writeFileToolDefinition,
-    saveMemoryToolDefinition,
-    searchMemoryToolDefinition,
-    loadSkillToolDefinition,
-    searchWebToolDefinition,
-    fetchUrlToolDefinition,
-    manageScheduleToolDefinition,
-  ];
+/** All available tools — keyed by name for permission filtering */
+const allTools: ToolDefinition[] = [
+  shellToolDefinition,
+  listShellCommandsToolDefinition,
+  readFileToolDefinition,
+  writeFileToolDefinition,
+  saveMemoryToolDefinition,
+  searchMemoryToolDefinition,
+  loadSkillToolDefinition,
+  searchWebToolDefinition,
+  fetchUrlToolDefinition,
+  manageScheduleToolDefinition,
+  createWorkflowToolDefinition,
+  delegateTaskToolDefinition,
+  queryWorkflowToolDefinition,
+  logProgressToolDefinition,
+  completeTaskToolDefinition,
+];
+
+/**
+ * Returns tool definitions for a specific agent, filtered by role permissions.
+ * If the agent has no role assigned, all tools are returned (backwards compatible).
+ */
+export function getToolDefinitions(agentId: string, isDelegated = false): ToolDefinition[] {
+  const permissions = getAgentPermissions(agentId);
+  let tools = permissions ? allTools.filter(t => permissions.includes(t.name)) : allTools;
+
+  // Sub-managers should not see create_workflow — they delegate within an existing workflow
+  if (isDelegated) {
+    tools = tools.filter(t => t.name !== "create_workflow");
+  }
+
+  return tools;
 }
 
 // ---------------------------------------------------------------------------
 // Tool executor
 // ---------------------------------------------------------------------------
 
+/**
+ * Central dispatch for all tool calls. Every tool the agent invokes flows
+ * through here — the ReAct loop in loop.ts calls this for each tool_use
+ * block the LLM returns.
+ *
+ * @param name     - Tool name from the LLM response (e.g. "shell_exec", "read_file")
+ * @param input    - Tool arguments parsed from the LLM response
+ * @param agentId  - Which agent is calling this tool (used for permissions, sandboxing, memory scoping)
+ * @param confirm      - Optional callback to ask the user YES/NO for privileged operations.
+ *                       Provided by interactive channels (Telegram, Discord, WS).
+ *                       Undefined for non-interactive contexts (scheduled jobs, tasks).
+ * @param taskContext  - Optional context for the currently executing task. Set by the
+ *                       orchestrator runner. Used by complete_task, log_progress (to know
+ *                       which task to update), and delegate_task (mid-level managers use
+ *                       workflowId and taskId for sub-task creation).
+ * @returns            - Always a string — either the tool's output or an error message.
+ *                       Never throws — errors are caught and returned as "[tool error] ..." strings
+ *                       so the LLM can read the error and decide what to do next.
+ */
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
   agentId: string,
-  confirm?: ConfirmFn
+  confirm?: ConfirmFn,
+  taskContext?: TaskContext,
 ): Promise<string> {
   try {
     switch (name) {
@@ -150,10 +197,10 @@ export async function executeTool(
       }
 
       case "save_memory":
-        return await saveMemory(input.key as string, input.content as string);
+        return await saveMemory(agentId, input.key as string, input.content as string);
 
       case "memory_search":
-        return await searchMemory(input.query as string);
+        return await searchMemory(agentId, input.query as string);
 
       case "load_skill":
         return loadSkill(input.name as string, agentId);
@@ -166,6 +213,21 @@ export async function executeTool(
 
       case "manage_schedule":
         return await manageSchedule(input, agentId);
+
+      case "create_workflow":
+        return await createWorkflow(input, agentId);
+
+      case "delegate_task":
+        return await delegateTask(input, agentId, taskContext);
+
+      case "query_workflow":
+        return await queryWorkflow(input, agentId);
+
+      case "log_progress":
+        return await logProgress(input, agentId, taskContext);
+
+      case "complete_task":
+        return await completeTask(input, taskContext);
 
       default:
         return `[tool error] Unknown tool: "${name}"`;

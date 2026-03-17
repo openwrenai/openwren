@@ -91,7 +91,7 @@ export async function executeJob(
 
     if (job.isolated) {
       // Isolated: use separate job session file, no maintenance, no store prefix
-      const sessionFile = jobSessionFilePath(job.user, jobId);
+      const sessionFile = jobSessionFilePath(job.agent, jobId);
       prompt = job.prompt;
       loopOpts = { sessionFile, skipMaintenance: true };
     } else {
@@ -118,7 +118,7 @@ export async function executeJob(
     // Prune isolated job session if needed
     if (job.isolated) {
       pruneJobSession(
-        jobSessionFilePath(job.user, jobId),
+        jobSessionFilePath(job.agent, jobId),
         config.scheduler.runHistory.sessionRetention,
       );
     }
