@@ -21,11 +21,24 @@
 
   // --- Agents ---
   // "agents.atlas.name": "Atlas",
+  // "agents.atlas.description": "General manager, orchestrates tasks",
+  // "agents.atlas.role": "manager",
   // "agents.einstein.name": "Einstein",
+  // "agents.einstein.description": "Physics and science specialist",
   // "agents.einstein.model": "anthropic/claude-sonnet-4-6",
   // "agents.einstein.fallback": "anthropic/claude-haiku-3-5",
   // "agents.wizard.name": "Wizard",
   // "agents.personal_trainer.name": "Coach",
+
+  // --- Teams (manager-worker relationships, independent of agents) ---
+  // "teams.alpha.manager": "atlas",
+  // "teams.alpha.members": ["einstein", "wizard"],
+
+  // --- Roles (each role defines which tools/permissions an agent gets) ---
+  // Defaults: "manager" and "worker" — override or create custom roles:
+  // "roles.manager": ["delegate_task", "query_workflow", "read_file", "save_memory", "memory_search"],
+  // "roles.worker": ["shell_exec", "list_shell_commands", "read_file", "write_file", "save_memory", "memory_search", "search_web", "fetch_url"],
+  // "roles.analyst": ["read_file", "search_web", "fetch_url", "save_memory", "memory_search"],
 
   // --- Users ---
   // "users.owner.displayName": "Your Name",

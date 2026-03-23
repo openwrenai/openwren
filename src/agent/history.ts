@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { config } from "../config";
+import { config, agentSessionDir, agentSessionPath, agentJobSessionPath } from "../config";
 import type { Message, LLMProvider } from "../providers";
 
 // ---------------------------------------------------------------------------
@@ -12,23 +12,23 @@ export interface TimestampedMessage extends Message {
 }
 
 // ---------------------------------------------------------------------------
-// Session file paths
+// Session file paths — agent-centric layout
 // ---------------------------------------------------------------------------
 
 /**
  * Returns the directory for a user+agent session.
- * Path: {workspace}/sessions/{userId}/{agentId}/
+ * Path: {workspace}/agents/{agentId}/sessions/users/{userId}/
  */
 function sessionDir(userId: string, agentId: string): string {
-  return path.join(config.workspaceDir, "sessions", userId, agentId);
+  return agentSessionDir(agentId, userId);
 }
 
 /**
  * Returns the active session file path.
- * Path: {workspace}/sessions/{userId}/{agentId}/active.jsonl
+ * Path: {workspace}/agents/{agentId}/sessions/users/{userId}/active.jsonl
  */
 function sessionPath(userId: string, agentId: string): string {
-  return path.join(sessionDir(userId, agentId), "active.jsonl");
+  return agentSessionPath(agentId, userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -373,13 +373,12 @@ ${messages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : 
 
 /**
  * Returns the file path for an isolated job session.
- * Path: {workspace}/sessions/{userId}/jobs/{jobId}.jsonl
+ * Path: {workspace}/agents/{agentId}/sessions/jobs/{jobId}.jsonl
  *
- * Scoped to user (not agent) so reassigning a job to a different agent
- * preserves the session history without orphaning files.
+ * Scoped to agent — the job session lives under the agent that runs it.
  */
-export function jobSessionFilePath(userId: string, jobId: string): string {
-  return path.join(config.workspaceDir, "sessions", userId, "jobs", `${jobId}.jsonl`);
+export function jobSessionFilePath(agentId: string, jobId: string): string {
+  return agentJobSessionPath(agentId, jobId);
 }
 
 /**
