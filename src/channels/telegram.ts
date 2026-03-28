@@ -3,6 +3,7 @@ import { config, AgentConfig, resolveUserId } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import { bus } from "../events";
 import { handleConfirmResponse, createConfirmFn, CONFIRM_HELP } from "./confirm";
+import { handleCommand } from "./commands";
 import type { Channel } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,13 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
       } else if (confirmResult === false) {
         await ctx.reply("Cancelled.");
       }
+      return;
+    }
+
+    // Check for slash commands (/new, /reset) before reaching the agent loop
+    const commandResponse = handleCommand(text, userId);
+    if (commandResponse !== null) {
+      await ctx.reply(commandResponse);
       return;
     }
 

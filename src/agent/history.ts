@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { config, agentSessionDir, agentSessionPath, agentJobSessionPath } from "../config";
+import { config, userSessionDir, userSessionPath, userSessionArchiveDir, agentJobSessionPath } from "../config";
 import type { Message, LLMProvider } from "../providers";
 
 // ---------------------------------------------------------------------------
@@ -12,23 +12,23 @@ export interface TimestampedMessage extends Message {
 }
 
 // ---------------------------------------------------------------------------
-// Session file paths — agent-centric layout
+// Session file paths — user-scoped layout
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the directory for a user+agent session.
- * Path: {workspace}/agents/{agentId}/sessions/users/{userId}/
+ * Returns the directory for a user's sessions.
+ * Path: {workspace}/sessions/{userId}/
  */
-function sessionDir(userId: string, agentId: string): string {
-  return agentSessionDir(agentId, userId);
+function sessionDir(userId: string, _agentId: string): string {
+  return userSessionDir(userId);
 }
 
 /**
- * Returns the active session file path.
- * Path: {workspace}/agents/{agentId}/sessions/users/{userId}/active.jsonl
+ * Returns the main session file path.
+ * Path: {workspace}/sessions/{userId}/main.jsonl
  */
-function sessionPath(userId: string, agentId: string): string {
-  return agentSessionPath(agentId, userId);
+function sessionPath(userId: string, _agentId: string): string {
+  return userSessionPath(userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,14 +280,19 @@ export interface CompactionResult {
 }
 
 /**
- * Archives the current active.jsonl and writes compacted messages as the new active.
- * Archive filename: yyyy-mm-dd_hh-mm-ss.jsonl (UTC, zero-padded).
+ * Archives the current main.jsonl and writes compacted messages as the new main.
+ * Archive goes to sessions/{userId}/archives/main-{timestamp}.jsonl.
  */
 function archiveAndWrite(userId: string, agentId: string, compactedMessages: TimestampedMessage[]): void {
   const activePath = sessionPath(userId, agentId);
-  const dir = sessionDir(userId, agentId);
+  const archiveDir = userSessionArchiveDir(userId);
 
-  // Rename active.jsonl to timestamped archive file (UTC)
+  // Ensure archive directory exists
+  if (!fs.existsSync(archiveDir)) {
+    fs.mkdirSync(archiveDir, { recursive: true });
+  }
+
+  // Move main.jsonl to timestamped archive file (UTC)
   if (fs.existsSync(activePath)) {
     const now = new Date();
     const y = now.getUTCFullYear();
@@ -296,13 +301,13 @@ function archiveAndWrite(userId: string, agentId: string, compactedMessages: Tim
     const h = String(now.getUTCHours()).padStart(2, "0");
     const mi = String(now.getUTCMinutes()).padStart(2, "0");
     const s = String(now.getUTCSeconds()).padStart(2, "0");
-    const archiveName = `${y}-${mo}-${d}_${h}-${mi}-${s}.jsonl`;
-    const archivePath = path.join(dir, archiveName);
+    const archiveName = `main-${y}-${mo}-${d}_${h}-${mi}-${s}.jsonl`;
+    const archivePath = path.join(archiveDir, archiveName);
     fs.renameSync(activePath, archivePath);
-    console.log(`[compaction] Archived session to ${archiveName}`);
+    console.log(`[compaction] Archived session to archives/${archiveName}`);
   }
 
-  // Write new active.jsonl with compacted messages
+  // Write new main.jsonl with compacted messages
   const content = compactedMessages.map((m) => JSON.stringify(m)).join("\n") + "\n";
   fs.writeFileSync(activePath, content, "utf-8");
 }

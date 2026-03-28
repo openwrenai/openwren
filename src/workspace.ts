@@ -9,6 +9,12 @@ import { config } from "./config";
  * ~/.openwren/
  * ├── data/                   ← SQLite databases
  * ├── teams/                  ← shared team folders
+ * ├── sessions/               ← user-facing conversations (user-scoped)
+ * │   └── {userId}/
+ * │       ├── sessions.json   ← index of WebUI sessions
+ * │       ├── main.jsonl      ← default session — all channels hit this
+ * │       ├── {uuid}.jsonl    ← WebUI sessions
+ * │       └── archives/
  * ├── schedules/
  * │   ├── jobs.json
  * │   └── runs/
@@ -20,10 +26,8 @@ import { config } from "./config";
  *         ├── workspace/
  *         ├── memory/
  *         ├── skills/
- *         └── sessions/
- *             ├── users/{userId}/active.jsonl
+ *         └── sessions/       ← system sessions only (tasks, jobs)
  *             ├── jobs/
- *             ├── workflows/
  *             └── tasks/
  */
 export function initWorkspace(): void {
@@ -31,6 +35,7 @@ export function initWorkspace(): void {
     config.workspaceDir,
     path.join(config.workspaceDir, "data"),
     path.join(config.workspaceDir, "teams"),
+    path.join(config.workspaceDir, "sessions"),
     path.join(config.workspaceDir, "agents"),
     path.join(config.workspaceDir, "skills"),
     path.join(config.workspaceDir, "schedules"),
@@ -44,9 +49,17 @@ export function initWorkspace(): void {
     }
   }
 
-  // Ensure every configured agent has a soul.md and agent-centric directory structure
+  // Create per-user session directories
   const userIds = [...Object.keys(config.users), "local"];
+  for (const userId of userIds) {
+    const userDir = path.join(config.workspaceDir, "sessions", userId);
+    const archiveDir = path.join(userDir, "archives");
+    if (!fs.existsSync(archiveDir)) {
+      fs.mkdirSync(archiveDir, { recursive: true });
+    }
+  }
 
+  // Ensure every configured agent has a soul.md and agent-centric directory structure
   for (const [agentId, agentConfig] of Object.entries(config.agents)) {
     const agentDir = path.join(config.workspaceDir, "agents", agentId);
     const soulPath = path.join(agentDir, "soul.md");
@@ -56,18 +69,13 @@ export function initWorkspace(): void {
       console.log(`Created agent directory: ${agentDir}`);
     }
 
-    // Create agent subdirectories
+    // Create agent subdirectories — system sessions only (tasks, jobs)
     const subdirs = [
       path.join(agentDir, "memory"),
       path.join(agentDir, "workspace"),
       path.join(agentDir, "sessions", "jobs"),
-      path.join(agentDir, "sessions", "workflows"),
       path.join(agentDir, "sessions", "tasks"),
     ];
-    // Create user session dirs for each configured user
-    for (const userId of userIds) {
-      subdirs.push(path.join(agentDir, "sessions", "users", userId));
-    }
     for (const dir of subdirs) {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });

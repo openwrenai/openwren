@@ -271,13 +271,25 @@ function resolveEnvRefs(obj: any): any {
 // ---------------------------------------------------------------------------
 
 /** Session directory for user ↔ agent conversations */
-export function agentSessionDir(agentId: string, userId: string): string {
-  return path.join(WORKSPACE_DIR, "agents", agentId, "sessions", "users", userId);
+
+/** User session directory: sessions/{userId}/ */
+export function userSessionDir(userId: string): string {
+  return path.join(WORKSPACE_DIR, "sessions", userId);
 }
 
-/** Active session file for user ↔ agent */
-export function agentSessionPath(agentId: string, userId: string): string {
-  return path.join(agentSessionDir(agentId, userId), "active.jsonl");
+/** Main session file: sessions/{userId}/main.jsonl — shared across all channels */
+export function userSessionPath(userId: string): string {
+  return path.join(userSessionDir(userId), "main.jsonl");
+}
+
+/** Session archives directory: sessions/{userId}/archives/ */
+export function userSessionArchiveDir(userId: string): string {
+  return path.join(userSessionDir(userId), "archives");
+}
+
+/** WebUI/CLI session file by UUID: sessions/{userId}/{sessionId}.jsonl */
+export function userNamedSessionPath(userId: string, sessionId: string): string {
+  return path.join(userSessionDir(userId), `${sessionId}.jsonl`);
 }
 
 /** Memory directory for an agent */

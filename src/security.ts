@@ -136,8 +136,6 @@ function loadSecurity(): SecurityConfig {
     if (modeOverride) {
       const label = modeOverride === "deny" ? "deny (shell disabled)" : modeOverride;
       console.log(`[security] ${agentId}: ${label}`);
-    } else {
-      console.log(`[security] ${agentId}: inherits ${sec.mode}`);
     }
 
     // Log per-agent path overrides
