@@ -244,20 +244,20 @@ export async function runAgentLoop(
       }
 
       // ---- Tool use — execute and loop again ----
-      // The LLM returned one or more tool_use blocks. Each block has:
-      //   id: unique ID (LLM-generated, echoed back in tool_result)
+      // The LLM returned one or more tool calls. Each has:
+      //   id: unique ID (echoed back in tool-result so the LLM can match request → response)
       //   name: which tool to call (e.g. "read_file", "shell_exec")
       //   input: arguments the LLM generated based on the tool's input_schema
       if (response.type === "tool_use" && response.toolCalls?.length) {
-        // Save the LLM's tool_use blocks to session history — the LLM needs to
+        // Save the LLM's tool-call blocks to session history — the LLM needs to
         // see its own requests in the conversation on the next iteration
         const assistantToolMsg: TimestampedMessage = {
           timestamp: Date.now(),
           role: "assistant",
           content: response.toolCalls.map((tc) => ({
-            type: "tool_use" as const,
-            id: tc.id,
-            name: tc.name,
+            type: "tool-call" as const,
+            toolCallId: tc.id,
+            toolName: tc.name,
             input: tc.input,
           })),
         };
@@ -269,21 +269,21 @@ export async function runAgentLoop(
         const toolResults = await Promise.all(
           response.toolCalls.map(async (tc) => {
             console.log(`[loop:${agentId}] Tool call: ${tc.name}`, summarizeToolInput(tc.name, tc.input));
-            const result = await executeTool(tc.name, tc.input, agentId, confirm, opts?.taskContext);
-            console.log(`[loop:${agentId}] Tool result: ${tc.name} →`, summarizeToolResult(tc.name, result));
+            const execResult = await executeTool(tc.name, tc.input, agentId, confirm, opts?.taskContext);
+            console.log(`[loop:${agentId}] Tool result: ${tc.name} →`, summarizeToolResult(tc.name, execResult));
             return {
-              type: "tool_result" as const,
-              tool_use_id: tc.id,  // Echoes back the LLM's ID so it can match request → response
-              content: result,
+              type: "tool-result" as const,
+              toolCallId: tc.id,
+              toolName: tc.name,
+              output: { type: "text" as const, value: execResult },
             };
           })
         );
 
-        // Save tool results to session history as a "user" message — this is the
-        // Anthropic API convention: tool results are sent in the user role
+        // Save tool results to session history with role "tool"
         const toolResultMsg: TimestampedMessage = {
           timestamp: Date.now(),
-          role: "user",
+          role: "tool" as const,
           content: toolResults,
         };
         messages.push(toolResultMsg);

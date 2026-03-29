@@ -51,8 +51,29 @@ export interface Config {
     anthropic: {
       apiKey: string;      // Credentials only — model selection moved to defaultModel / agents.*.model
     };
+    openai: {
+      apiKey: string;
+    };
+    google: {
+      apiKey: string;
+    };
+    mistral: {
+      apiKey: string;
+    };
+    groq: {
+      apiKey: string;
+    };
+    xai: {
+      apiKey: string;
+    };
+    deepseek: {
+      apiKey: string;
+    };
     ollama: {
       baseUrl: string;
+    };
+    llmgateway: {
+      apiKey: string;
     };
   };
   agents: Record<string, AgentConfig>;
@@ -128,8 +149,29 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
     anthropic: {
       apiKey: "",
     },
+    openai: {
+      apiKey: "",
+    },
+    google: {
+      apiKey: "",
+    },
+    mistral: {
+      apiKey: "",
+    },
+    groq: {
+      apiKey: "",
+    },
+    xai: {
+      apiKey: "",
+    },
+    deepseek: {
+      apiKey: "",
+    },
     ollama: {
       baseUrl: "http://localhost:11434",
+    },
+    llmgateway: {
+      apiKey: "",
     },
   },
   agents: {
@@ -534,14 +576,36 @@ function loadConfig(): Config {
     );
   }
 
-  // Validate API key if any model in the chain uses Anthropic
-  const usesAnthropic =
-    defaultModelStr.startsWith("anthropic/") ||
-    (merged.defaultFallback ?? "").includes("anthropic/");
-  if (usesAnthropic && !merged.providers.anthropic.apiKey) {
-    throw new Error(
-      'Anthropic API key not set. Add "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}" to openwren.json and set ANTHROPIC_API_KEY in ~/.openwren/.env'
-    );
+  // Validate API keys — collect all provider names referenced in any model chain,
+  // then verify each one that needs a key has one configured.
+  const referencedProviders = new Set<string>();
+  const allModelSpecs = [
+    defaultModelStr,
+    merged.defaultFallback ?? "",
+    ...Object.values(merged.agents as Record<string, AgentConfig>).flatMap((a) =>
+      [a.model ?? "", a.fallback ?? ""]
+    ),
+  ];
+  for (const spec of allModelSpecs) {
+    for (const segment of spec.split(",")) {
+      const trimmed = segment.trim();
+      const slash = trimmed.indexOf("/");
+      if (slash > 0) {
+        referencedProviders.add(trimmed.slice(0, slash));
+      }
+    }
+  }
+  // Ollama doesn't need an API key — skip it
+  const keyProviders = ["anthropic", "openai", "google", "mistral", "groq", "xai", "deepseek"];
+  for (const name of referencedProviders) {
+    if (!keyProviders.includes(name)) continue;
+    const providerConfig = (merged.providers as Record<string, { apiKey?: string }>)[name];
+    if (!providerConfig?.apiKey) {
+      const envVar = name === "anthropic" ? "ANTHROPIC_API_KEY" : `${name.toUpperCase()}_API_KEY`;
+      throw new Error(
+        `${name} API key not set. Add "providers.${name}.apiKey": "\${env:${envVar}}" to openwren.json and set ${envVar} in ~/.openwren/.env`
+      );
+    }
   }
 
   // Validate defaultAgent references a real agent

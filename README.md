@@ -110,7 +110,7 @@ All config lives in `~/.openwren/`:
 {
   // Model selection — "provider/model" format
   "defaultModel": "anthropic/claude-sonnet-4-6",
-  "defaultFallback": "anthropic/claude-haiku-3-5",
+  "defaultFallback": "anthropic/claude-haiku-4-5",
 
   // Per-agent model override
   "agents.einstein.model": "anthropic/claude-opus-4-6",

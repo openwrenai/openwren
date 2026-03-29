@@ -1,30 +1,36 @@
 import { config } from "../config";
-import { AnthropicProvider } from "./anthropic";
-import { OllamaProvider } from "./ollama";
+import { AiSdkProvider } from "./ai-sdk";
+import type { AiSdkCreds } from "./ai-sdk";
 
 // ---------------------------------------------------------------------------
 // Message types — the common format used between the agent loop and providers
 // ---------------------------------------------------------------------------
 
-/** A single message in a conversation. Content is either plain text or structured blocks (tool use/results). */
+/** A single message in a conversation. Content is either plain text or structured blocks (tool calls/results). */
 export interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string | MessageContent[];
 }
 
-/** A structured content block inside a message — can be text, a tool call, or a tool result. */
-export interface MessageContent {
-  type: "text" | "tool_use" | "tool_result";
-  // text
-  text?: string;
-  // tool_use
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  // tool_result
-  tool_use_id?: string;
-  content?: string;
+/** A structured content block inside a message — can be text, a tool call, or a tool result.
+ *  Field names match the AI SDK's ModelMessage parts so messages pass through without translation. */
+export interface TextContent {
+  type: "text";
+  text: string;
 }
+export interface ToolCallContent {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+export interface ToolResultContent {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: string;
+  output: { type: "text"; value: string };
+}
+export type MessageContent = TextContent | ToolCallContent | ToolResultContent;
 
 // ---------------------------------------------------------------------------
 // Tool types — how tools are defined and called
@@ -63,6 +69,7 @@ export interface LLMResponse {
   text?: string;
   toolCalls?: ToolCall[];
   error?: string;
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +87,11 @@ export interface LLMProvider {
     messages: Message[],
     tools: ToolDefinition[]
   ): Promise<LLMResponse>;
+  chatStream?(
+    systemPrompt: string,
+    messages: Message[],
+    tools: ToolDefinition[]
+  ): AsyncIterable<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,17 +170,12 @@ export function resolveModelChain(agentId: string): ProviderSpec[] {
 
 /**
  * Creates a single LLMProvider instance for a given provider/model spec.
- * Maps the provider name to the correct class (Anthropic, Ollama, etc.).
+ * All providers route through AiSdkProvider. Credentials (apiKey or baseUrl)
+ * are resolved from config.providers[name] — each entry matches AiSdkCreds.
  */
 function createProviderFromSpec(spec: ProviderSpec): LLMProvider {
-  switch (spec.provider) {
-    case "anthropic":
-      return new AnthropicProvider(spec.model);
-    case "ollama":
-      return new OllamaProvider(spec.model);
-    default:
-      throw new Error(`Unknown provider: "${spec.provider}"`);
-  }
+  const providerConfig = (config.providers as Record<string, AiSdkCreds>)[spec.provider] ?? {};
+  return new AiSdkProvider(spec.provider, spec.model, providerConfig);
 }
 
 // ---------------------------------------------------------------------------
