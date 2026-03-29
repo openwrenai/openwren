@@ -19,6 +19,7 @@ import * as crypto from "crypto";
 import { WebSocket } from "ws";
 import { config } from "../config";
 import { runAgentLoop } from "../agent/loop";
+import { handleCommand } from "./commands";
 import { bus, BusEventName, BusEvents } from "../events";
 import { setWsConnectionHandler } from "../gateway/server";
 import type { Channel } from "./types";
@@ -209,6 +210,14 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     }
 
     const text = msg.text.trim();
+
+    // Check for slash commands (/new, /reset) before reaching the agent loop
+    const commandResponse = handleCommand(text, client.userId);
+    if (commandResponse !== null) {
+      sendTo(client, "message", { agentId, text: commandResponse });
+      return;
+    }
+
     console.log(`[websocket] ${agentConfig.name} ← ${client.userId}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
 
     // Bus: notify observers that a message arrived
