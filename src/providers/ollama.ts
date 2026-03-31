@@ -151,14 +151,14 @@ export class OllamaProvider implements LLMProvider {
       const blocks = msg.content as MessageContent[];
 
       // Assistant message with tool calls
-      const toolUseBlocks = blocks.filter((b) => b.type === "tool_use");
-      if (toolUseBlocks.length > 0) {
+      const toolCallBlocks = blocks.filter((b): b is import("./index").ToolCallContent => b.type === "tool-call");
+      if (toolCallBlocks.length > 0) {
         result.push({
           role: "assistant",
           content: null,
-          tool_calls: toolUseBlocks.map((b) => ({
+          tool_calls: toolCallBlocks.map((b) => ({
             function: {
-              name: b.name!,
+              name: b.toolName,
               arguments: b.input ?? {},
             },
           })),
@@ -166,11 +166,11 @@ export class OllamaProvider implements LLMProvider {
         continue;
       }
 
-      // User message with tool results — one Ollama "tool" message per result
-      const toolResultBlocks = blocks.filter((b) => b.type === "tool_result");
+      // Tool result messages — one Ollama "tool" message per result
+      const toolResultBlocks = blocks.filter((b): b is import("./index").ToolResultContent => b.type === "tool-result");
       if (toolResultBlocks.length > 0) {
         for (const b of toolResultBlocks) {
-          result.push({ role: "tool", content: b.content ?? "" });
+          result.push({ role: "tool", content: b.output.value ?? "" });
         }
         continue;
       }

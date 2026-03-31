@@ -17,7 +17,14 @@
 
   // --- Provider credentials ---
   // "providers.anthropic.apiKey": "${env:ANTHROPIC_API_KEY}",
+  // "providers.openai.apiKey": "${env:OPENAI_API_KEY}",
+  // "providers.google.apiKey": "${env:GOOGLE_API_KEY}",
+  // "providers.mistral.apiKey": "${env:MISTRAL_API_KEY}",
+  // "providers.groq.apiKey": "${env:GROQ_API_KEY}",
+  // "providers.xai.apiKey": "${env:XAI_API_KEY}",
+  // "providers.deepseek.apiKey": "${env:DEEPSEEK_API_KEY}",
   // "providers.ollama.baseUrl": "http://localhost:11434",
+  // "providers.llmgateway.apiKey": "${env:LLM_GATEWAY_API_KEY}",
 
   // --- Agents ---
   // "agents.atlas.name": "Atlas",

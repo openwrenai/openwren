@@ -5,3 +5,4 @@ dist/
 src/test-injection.ts
 docs/
 development/
+.soulforge/

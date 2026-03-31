@@ -260,9 +260,9 @@ function estimateTokensContent(messages: Message[]): number {
       chars += msg.content.length;
     } else {
       for (const block of msg.content) {
-        if (block.text) chars += block.text.length;
-        if (block.input) chars += JSON.stringify(block.input).length;
-        if (block.content) chars += block.content.length;
+        if (block.type === "text") chars += block.text.length;
+        if (block.type === "tool-call") chars += JSON.stringify(block.input).length;
+        if (block.type === "tool-result") chars += block.output.value.length;
       }
     }
   }
