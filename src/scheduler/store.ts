@@ -40,7 +40,6 @@ export interface RunEntry {
   ts: number;
   status: "ok" | "error";
   durationMs: number;
-  tokens: number;
   delivered: boolean;
   suppressed?: string;
   error?: string;

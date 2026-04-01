@@ -77,6 +77,14 @@ async function handleWorkflowCompleted(event: WorkflowCompletedEvent): Promise<v
       prompt,
       undefined,
       true,
+      {
+        usageContext: {
+          source: "notify",
+          workflowId: event.workflowId,
+          userId,
+          sessionId: "main",
+        },
+      },
     );
 
     await deliverMessage(channel, userId, managerAgentId, result.text);
@@ -115,6 +123,14 @@ async function handleTaskFailed(event: TaskFailedEvent): Promise<void> {
       prompt,
       undefined,
       true,
+      {
+        usageContext: {
+          source: "notify",
+          workflowId,
+          userId,
+          sessionId: "main",
+        },
+      },
     );
 
     await deliverMessage(channel, userId, assignedBy, result.text);

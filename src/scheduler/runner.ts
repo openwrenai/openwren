@@ -24,7 +24,6 @@ export interface RunResult {
   delivered: boolean;
   suppressed?: string;
   durationMs: number;
-  tokens: number;
   error?: string;
   errorType?: "transient" | "permanent";
 }
@@ -76,7 +75,6 @@ export async function executeJob(
       text: "",
       delivered: false,
       durationMs: Date.now() - startMs,
-      tokens: 0,
       error: `Unknown agent: "${job.agent}"`,
       errorType: "permanent",
     };
@@ -89,15 +87,22 @@ export async function executeJob(
     let prompt: string;
     let loopOpts: RunLoopOptions | undefined;
 
+    const usageContext = {
+      source: "job" as const,
+      sourceId: jobId,
+      userId: job.user,
+      sessionId: job.isolated ? `job:${jobId}` : "main",
+    };
+
     if (job.isolated) {
       // Isolated: use separate job session file, no maintenance, no store prefix
       const sessionFile = jobSessionFilePath(job.agent, jobId);
       prompt = job.prompt;
-      loopOpts = { sessionFile, skipMaintenance: true };
+      loopOpts = { sessionFile, skipMaintenance: true, usageContext };
     } else {
       // Main session: prefix prompt for traceability, prefix response for display
       prompt = `[job:${jobId}] ${job.prompt}`;
-      loopOpts = { storePrefix: `[${job.name}] ` };
+      loopOpts = { storePrefix: `[${job.name}] `, usageContext };
     }
 
     const loopResult = await runAgentLoop(
@@ -113,7 +118,6 @@ export async function executeJob(
     const rawText = loopResult.text;
     const deliveryText = `[${job.name}] ${rawText}`;
     const durationMs = Date.now() - startMs;
-    const tokens = Math.ceil(rawText.length / 4);
 
     // Prune isolated job session if needed
     if (job.isolated) {
@@ -131,7 +135,6 @@ export async function executeJob(
         delivered: false,
         suppressed: HEARTBEAT_OK,
         durationMs,
-        tokens,
       };
       logRun(jobId, result);
 
@@ -156,7 +159,6 @@ export async function executeJob(
       text: rawText,
       delivered,
       durationMs,
-      tokens,
     };
     logRun(jobId, result);
 
@@ -183,7 +185,6 @@ export async function executeJob(
       text: "",
       delivered: false,
       durationMs,
-      tokens: 0,
       error: error.message,
       errorType,
     };
@@ -209,7 +210,6 @@ function logRun(jobId: string, result: RunResult, retry?: number): void {
     ts: Date.now(),
     status: result.status,
     durationMs: result.durationMs,
-    tokens: result.tokens,
     delivered: result.delivered,
   };
 

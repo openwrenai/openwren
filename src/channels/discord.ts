@@ -118,7 +118,9 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     // Discord.js can process messages concurrently, but using the same
     // non-blocking pattern as Telegram keeps the confirmation flow consistent
     // and avoids any risk of handler backpressure blocking confirmation replies.
-    runAgentLoop(userId, agentId, agentConfig, text, confirm)
+    runAgentLoop(userId, agentId, agentConfig, text, confirm, false, {
+      usageContext: { source: "chat", userId, sessionId: "main" },
+    })
       .then(async (result) => {
         console.log(
           `[discord] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`

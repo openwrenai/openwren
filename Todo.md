@@ -157,38 +157,38 @@ Create `src/usage/` module with two files:
 - Daily JSONL log: `~/.openwren/usage/YYYY-MM-DD.jsonl` — append-only, one line per loop run
 - Accumulated summary: `~/.openwren/usage/summary.json` — running totals, updated atomically per run
 
-- [ ] Create `src/usage/index.ts`:
+- [x] Create `src/usage/index.ts`:
   - `recordUsage(entry)` — appends line to today's daily file + updates summary.json
   - `loadSummary()` — reads summary.json (for dashboards, CLI)
   - `rebuildSummary()` — scans all daily files and regenerates summary.json (resilience — called on startup if summary is missing/corrupt)
-- [ ] Daily log line format: `{ ts, agent, provider, model, in, out, source, sourceId, workflowId, userId, sessionId }`
-- [ ] Summary format: `{ days: { "YYYY-MM-DD": { in, out } }, byAgent: { ... }, byProvider: { ... }, bySession: { ... } }`
-- [ ] Atomic summary writes — read → update counters → write whole file
-- [ ] Ensure `~/.openwren/usage/` directory is created if missing
+- [x] Daily log line format: `{ ts, agent, provider, model, in, out, source, sourceId, workflowId, userId, sessionId }`
+- [x] Summary format: `{ days: { "YYYY-MM-DD": { in, out } }, byAgent: { ... }, byProvider: { ... }, bySession: { ... } }`
+- [x] Atomic summary writes — read → update counters → write whole file
+- [x] Ensure `~/.openwren/usage/` directory is created if missing
 - [ ] Optional: configurable retention — prune daily files older than N days, drop stale entries from summary
 
 **Step 3: Recording in agent loop**
-- [ ] Accumulate token counts across all ReAct iterations in `runAgentLoop()` — sum `response.usage.inputTokens` / `response.usage.outputTokens` from each LLM call
-- [ ] Extract provider and model from `provider.name` (format `"provider/model"` — split on `/`)
-- [ ] Call `recordUsage()` when the loop finishes
-- [ ] Pass source context: `{ source, sourceId, workflowId, userId, sessionId }` via `RunLoopOptions`
-- [ ] Add `usage?: { inputTokens: number; outputTokens: number }` to `LoopResult` — so channels/WebUI can display per-turn token counts in real-time without reading files
+- [x] Accumulate token counts across all ReAct iterations in `runAgentLoop()` — sum `response.usage.inputTokens` / `response.usage.outputTokens` from each LLM call
+- [x] Extract provider and model from `provider.name` (format `"provider/model"` — split on `/`)
+- [x] Call `recordUsage()` when the loop finishes
+- [x] Pass source context: `{ source, sourceId, workflowId, userId, sessionId }` via `RunLoopOptions`
+- [x] Add `usage?: { inputTokens: number; outputTokens: number }` to `LoopResult` — so channels/WebUI can display per-turn token counts in real-time without reading files
 
 **Step 4: Wire up callers**
-- [ ] Channel adapters — set `source: "chat"`, `userId`, `sessionId`
-- [ ] Orchestrator runner — set `source: "task"`, `sourceId: task.slug`, `workflowId`
-- [ ] Scheduler runner — set `source: "job"`, `sourceId: jobId`
-- [ ] Notify — set `source: "notify"`, `workflowId`
-- [ ] Update scheduler runner to use real token counts from `LoopResult.usage` instead of `Math.ceil(rawText.length / 4)` estimate
+- [x] Channel adapters — set `source: "chat"`, `userId`, `sessionId`
+- [x] Orchestrator runner — set `source: "task"`, `sourceId: task.slug`, `workflowId`
+- [x] Scheduler runner — set `source: "job"`, `sourceId: jobId`
+- [x] Notify — set `source: "notify"`, `workflowId`
+- [x] Update scheduler runner to use real token counts from `LoopResult.usage` instead of `Math.ceil(rawText.length / 4)` estimate
 
 **Step 5: Query API**
-- [ ] `GET /api/usage` — reads summary.json, returns totals with optional filters (date range, agent, model, provider, source)
-- [ ] `GET /api/usage/detail?date=2026-03-31` — reads daily JSONL file, returns per-run entries for drill-down
-- [ ] Wire into `src/gateway/routes/`
+- [x] `GET /api/usage` — reads summary.json, returns totals with optional filters (date range, agent, model, provider, source)
+- [x] `GET /api/usage/detail?date=2026-03-31` — reads daily JSONL file, returns per-run entries for drill-down
+- [x] Wire into `src/gateway/routes/`
 
 **Step 6: CLI**
-- [ ] `openwren usage` — show today's token usage summary (reads summary.json)
-- [ ] `openwren usage --agent atlas --days 7` — per-agent breakdown from summary
+- [x] `openwren usage` — show today's token usage summary (reads summary.json)
+- [x] `openwren usage --agent atlas --days 7` — per-agent breakdown from summary
 
 ---
 
@@ -206,7 +206,19 @@ Optimize token costs by enabling Anthropic's prompt caching. System prompt + too
 
 ### Phase 10 — Web UI (Dashboard)
 
-A local browser dashboard at `http://127.0.0.1:3000`. Connects to Phase 4 WebSocket gateway. Opened via `openwren dashboard`.
+A local browser dashboard at `http://127.0.0.1:3000`. Opened via `openwren dashboard` (opens browser). The existing Fastify gateway serves the built SPA as static files and handles all backend communication — REST API for data operations, WebSocket for chat.
+
+**Tech stack:** React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui (Radix primitives). React 19 compiler handles memoization automatically — no `useMemo`/`useCallback` needed. shadcn components are copy-pasted into the project (not an npm dependency) — you own the code, full customization.
+
+**Project structure:** `webui/` at the top level with its own `package.json`, separate from the Node.js backend. Clean separation — frontend and backend only communicate via WebSocket and REST API. Never import backend code from frontend or vice versa. This structure also allows wrapping in Electron or Tauri later for a native desktop app (`.dmg`, `.exe`) without any rewrite.
+
+**Setup steps:**
+- [ ] Create `webui/` with Vite + React 19 + TypeScript
+- [ ] Run `npx shadcn@latest init` inside `webui/` — configures Tailwind, component system, theming
+- [ ] Add `@fastify/static` to gateway — serve `webui/dist/` as static files in production
+- [ ] Vite dev proxy config — forward `/api` and `/ws` to the running Fastify gateway during development
+- [ ] `openwren dashboard` CLI command — opens `http://localhost:3000` in default browser
+- [ ] Add `webui` build step to project build script
 
 **Chat & Sessions**
 - [ ] Chat interface — send messages, stream responses token-by-token, abort runs mid-stream
@@ -244,7 +256,9 @@ A local browser dashboard at `http://127.0.0.1:3000`. Connects to Phase 4 WebSoc
 - [ ] Skills panel — list all loaded skills, which are active vs gated out, enable/disable toggle
 
 **Usage & Monitoring**
-- [ ] Usage dashboard — token counts and estimated cost per session/agent/day
+- [ ] Usage dashboard — reads `summary.json` for instant totals, daily JSONL for drill-down (Phase 9.6)
+- [ ] Live token display — status bar below chat input showing session total + last turn usage (from `LoopResult.usage` via WebSocket, no file reads)
+- [ ] Token counts and estimated cost per session/agent/day
 - [ ] Live log tail — stream `~/.openwren/openwren.log` with text filter
 - [ ] System health — uptime, active agents, memory file count, session count
 

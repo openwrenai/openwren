@@ -94,6 +94,13 @@ export async function executeTask(taskId: number): Promise<void> {
           agentId: task.agentId,
           assignedBy: task.assignedBy,
         },
+        usageContext: {
+          source: "task",
+          sourceId: task.slug,
+          workflowId: task.workflowId,
+          userId: "system",
+          sessionId: `task:${task.slug}`,
+        },
       },
     );
 

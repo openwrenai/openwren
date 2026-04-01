@@ -174,6 +174,8 @@ export class AiSdkProvider implements LLMProvider {
           input: (tc.input ?? {}) as Record<string, unknown>,
         })),
         usage,
+        provider: this.provider,
+        model: this.model,
       };
     }
 
@@ -181,6 +183,8 @@ export class AiSdkProvider implements LLMProvider {
       type: "text",
       text: result.text ?? "",
       usage,
+      provider: this.provider,
+      model: this.model,
     };
   }
 }
