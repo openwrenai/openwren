@@ -206,7 +206,9 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
     // grammY processes messages sequentially: if we await here, the handler
     // blocks and grammY cannot deliver the user's confirmation response
     // (yes/no/always) until the agent loop finishes — causing a deadlock.
-    runAgentLoop(userId, agentId, agentConfig, message, confirm)
+    runAgentLoop(userId, agentId, agentConfig, message, confirm, false, {
+      usageContext: { source: "chat", userId, sessionId: "main" },
+    })
       .then(async (result) => {
         console.log(`[telegram] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`);
 

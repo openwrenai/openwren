@@ -18,6 +18,8 @@ import {
   CompactionResult,
 } from "./history";
 import { getToolDefinitions, executeTool, ConfirmFn } from "../tools";
+import { recordUsage } from "../usage";
+import type { UsageContext } from "../usage";
 
 const MAX_ITERATIONS = config.agent?.maxIterations ?? 10;
 
@@ -86,12 +88,15 @@ export interface RunLoopOptions {
    *  log_progress know which task they're acting on. Also used by delegate_task
    *  (mid-level managers) to read workflowId and set parentTask on sub-tasks. */
   taskContext?: TaskContext;
+  /** Usage tracking context — identifies what triggered this loop run. */
+  usageContext?: UsageContext;
 }
 
 export interface LoopResult {
   text: string;
   compacted: boolean;
   nearThreshold: boolean;
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 /**
@@ -200,7 +205,36 @@ export async function runAgentLoop(
     // The loop continues until the LLM produces a text response or we
     // hit MAX_ITERATIONS (safety cap to prevent runaway tool loops).
     // -----------------------------------------------------------------------
+    /** Build usage object and record to usage files if context is provided. */
+    function finalizeUsage(): { inputTokens: number; outputTokens: number } | undefined {
+      if (totalIn === 0 && totalOut === 0) return undefined;
+      const usage = { inputTokens: totalIn, outputTokens: totalOut };
+
+      if (opts?.usageContext) {
+        const ctx = opts.usageContext;
+        recordUsage({
+          ts: Date.now(),
+          agent: agentId,
+          provider: lastProvider || "unknown",
+          model: lastModel || "unknown",
+          in: totalIn,
+          out: totalOut,
+          source: ctx.source,
+          sourceId: ctx.sourceId ?? null,
+          workflowId: ctx.workflowId ?? null,
+          userId: ctx.userId,
+          sessionId: ctx.sessionId ?? "main",
+        });
+      }
+
+      return usage;
+    }
+
     let iterations = 0;
+    let totalIn = 0;
+    let totalOut = 0;
+    let lastProvider = "";
+    let lastModel = "";
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -213,6 +247,14 @@ export async function runAgentLoop(
       // Sends: system prompt + full conversation history + tool definitions.
       // Returns one of: { type: "text", text } | { type: "tool_use", toolCalls } | { type: "error", error }
       const response = await provider.chat(systemPrompt, llmMessages, tools);
+
+      // Accumulate token usage across iterations and track which provider actually responded
+      if (response.usage) {
+        totalIn += response.usage.inputTokens;
+        totalOut += response.usage.outputTokens;
+      }
+      if (response.provider) lastProvider = response.provider;
+      if (response.model) lastModel = response.model;
 
       if (response.type === "error") {
         // Throw so callers can handle appropriately:
@@ -240,6 +282,7 @@ export async function runAgentLoop(
           text, // Return raw text without prefix
           compacted: compactionResult.compacted,
           nearThreshold: compactionResult.nearThreshold,
+          usage: finalizeUsage(),
         };
       }
 
@@ -299,6 +342,7 @@ export async function runAgentLoop(
             text: String(summary),
             compacted: compactionResult.compacted,
             nearThreshold: false,
+            usage: finalizeUsage(),
           };
         }
 
@@ -316,6 +360,7 @@ export async function runAgentLoop(
       text: capMsg,
       compacted: compactionResult.compacted,
       nearThreshold: compactionResult.nearThreshold,
+      usage: finalizeUsage(),
     };
   });
 }

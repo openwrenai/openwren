@@ -258,7 +258,9 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     };
 
     try {
-      const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm);
+      const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
+        usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
+      });
       console.log(
         `[websocket] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
       );

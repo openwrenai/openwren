@@ -753,9 +753,9 @@ async function cmdSchedule(args: string[]): Promise<void> {
 
       console.log(
         "Time".padEnd(20) + "Status".padEnd(10) + "Duration".padEnd(12) +
-        "Tokens".padEnd(10) + "Delivered".padEnd(12) + "Error"
+        "Delivered".padEnd(12) + "Error"
       );
-      console.log("-".repeat(80));
+      console.log("-".repeat(70));
 
       for (const r of runs) {
         const time = new Date(r.ts).toLocaleString("sv-SE", {
@@ -765,7 +765,7 @@ async function cmdSchedule(args: string[]): Promise<void> {
         const delivered = r.suppressed ? `no (${r.suppressed})` : r.delivered ? "yes" : "no";
         console.log(
           time.padEnd(20) + r.status.padEnd(10) + dur.padEnd(12) +
-          String(r.tokens ?? 0).padEnd(10) + delivered.padEnd(12) + (r.error ?? "")
+          delivered.padEnd(12) + (r.error ?? "")
         );
       }
       break;
@@ -789,7 +789,109 @@ Schedule Commands:
 }
 
 // ---------------------------------------------------------------------------
-// Usage
+// Command: usage — show token usage summary
+// ---------------------------------------------------------------------------
+
+async function cmdUsage(args: string[]): Promise<void> {
+  // Parse flags: --days N, --agent X
+  const flags: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--") && i + 1 < args.length) {
+      flags[arg.slice(2)] = args[++i];
+    }
+  }
+
+  const queryParams: string[] = [];
+  if (flags.days) queryParams.push(`days=${flags.days}`);
+  if (flags.agent) queryParams.push(`agent=${flags.agent}`);
+  if (flags.provider) queryParams.push(`provider=${flags.provider}`);
+
+  const qs = queryParams.length > 0 ? `?${queryParams.join("&")}` : "";
+  const { status, data } = await apiRequest("GET", `/api/usage${qs}`);
+
+  if (status !== 200) {
+    console.error("Failed to fetch usage:", data.error ?? status);
+    return;
+  }
+
+  const summary = data as {
+    days: Record<string, { in: number; out: number }>;
+    byAgent: Record<string, { in: number; out: number }>;
+    byProvider: Record<string, { in: number; out: number }>;
+    bySession: Record<string, { in: number; out: number; lastActive: string }>;
+  };
+
+  // Today's usage
+  const today = new Date().toISOString().slice(0, 10);
+  const todayUsage = summary.days[today];
+
+  if (!todayUsage && Object.keys(summary.days).length === 0) {
+    console.log("No usage data recorded yet.");
+    return;
+  }
+
+  // Daily breakdown
+  const sortedDays = Object.keys(summary.days).sort().reverse();
+  if (sortedDays.length > 0) {
+    console.log("Daily Usage:");
+    console.log("  " + "Date".padEnd(14) + "Input".padStart(10) + "Output".padStart(10) + "Total".padStart(10));
+    console.log("  " + "-".repeat(44));
+    for (const day of sortedDays) {
+      const d = summary.days[day];
+      console.log(
+        "  " + day.padEnd(14) +
+        fmtTokens(d.in).padStart(10) +
+        fmtTokens(d.out).padStart(10) +
+        fmtTokens(d.in + d.out).padStart(10)
+      );
+    }
+  }
+
+  // By agent
+  const agents = Object.keys(summary.byAgent);
+  if (agents.length > 0) {
+    console.log("\nBy Agent:");
+    console.log("  " + "Agent".padEnd(20) + "Input".padStart(10) + "Output".padStart(10) + "Total".padStart(10));
+    console.log("  " + "-".repeat(50));
+    for (const agent of agents) {
+      const a = summary.byAgent[agent];
+      console.log(
+        "  " + agent.padEnd(20) +
+        fmtTokens(a.in).padStart(10) +
+        fmtTokens(a.out).padStart(10) +
+        fmtTokens(a.in + a.out).padStart(10)
+      );
+    }
+  }
+
+  // By provider
+  const providers = Object.keys(summary.byProvider);
+  if (providers.length > 0) {
+    console.log("\nBy Provider:");
+    console.log("  " + "Provider".padEnd(20) + "Input".padStart(10) + "Output".padStart(10) + "Total".padStart(10));
+    console.log("  " + "-".repeat(50));
+    for (const prov of providers) {
+      const p = summary.byProvider[prov];
+      console.log(
+        "  " + prov.padEnd(20) +
+        fmtTokens(p.in).padStart(10) +
+        fmtTokens(p.out).padStart(10) +
+        fmtTokens(p.in + p.out).padStart(10)
+      );
+    }
+  }
+}
+
+/** Format token count with K/M suffixes for readability. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 10_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
+// ---------------------------------------------------------------------------
+// Help text
 // ---------------------------------------------------------------------------
 
 function printUsage(): void {
@@ -807,6 +909,7 @@ Commands:
   logs              Tail the daemon log file
   chat [agent]      Interactive terminal chat (default: atlas)
   schedule [cmd]    Manage scheduled jobs (list, create, enable, disable, delete, run, history)
+  usage [options]   Show token usage summary (--days N, --agent X, --provider X)
 `);
 }
 
@@ -826,6 +929,7 @@ async function main(): Promise<void> {
     case "logs":    cmdLogs();              break;
     case "chat":     await cmdChat(args[0]);   break;
     case "schedule": await cmdSchedule(args); break;
+    case "usage":    await cmdUsage(args);    break;
     default:         printUsage();            break;
   }
 }
