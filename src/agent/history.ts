@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { config, userSessionDir, userSessionPath, userSessionArchiveDir, agentJobSessionPath } from "../config";
+import { config, agentSessionDir, userSessionPath, userSessionArchiveDir, agentJobSessionPath } from "../config";
 import type { Message, LLMProvider } from "../providers";
 
 // ---------------------------------------------------------------------------
@@ -16,19 +16,19 @@ export interface TimestampedMessage extends Message {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the directory for a user's sessions.
- * Path: {workspace}/sessions/{userId}/
+ * Returns the directory for a user+agent session.
+ * Path: {workspace}/sessions/{userId}/{agentId}/
  */
-function sessionDir(userId: string, _agentId: string): string {
-  return userSessionDir(userId);
+function sessionDir(userId: string, agentId: string): string {
+  return agentSessionDir(userId, agentId);
 }
 
 /**
  * Returns the main session file path.
- * Path: {workspace}/sessions/{userId}/main.jsonl
+ * Path: {workspace}/sessions/{userId}/{agentId}/main.jsonl
  */
-function sessionPath(userId: string, _agentId: string): string {
-  return userSessionPath(userId);
+function sessionPath(userId: string, agentId: string): string {
+  return userSessionPath(userId, agentId);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,11 +281,11 @@ export interface CompactionResult {
 
 /**
  * Archives the current main.jsonl and writes compacted messages as the new main.
- * Archive goes to sessions/{userId}/archives/main-{timestamp}.jsonl.
+ * Archive goes to sessions/{userId}/{agentId}/archives/main-{timestamp}.jsonl.
  */
 function archiveAndWrite(userId: string, agentId: string, compactedMessages: TimestampedMessage[]): void {
   const activePath = sessionPath(userId, agentId);
-  const archiveDir = userSessionArchiveDir(userId);
+  const archiveDir = userSessionArchiveDir(userId, agentId);
 
   // Ensure archive directory exists
   if (!fs.existsSync(archiveDir)) {

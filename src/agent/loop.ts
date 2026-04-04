@@ -18,8 +18,6 @@ import {
   CompactionResult,
 } from "./history";
 import { getToolDefinitions, executeTool, ConfirmFn } from "../tools";
-import { recordUsage } from "../usage";
-import type { UsageContext } from "../usage";
 
 const MAX_ITERATIONS = config.agent?.maxIterations ?? 10;
 
@@ -88,15 +86,13 @@ export interface RunLoopOptions {
    *  log_progress know which task they're acting on. Also used by delegate_task
    *  (mid-level managers) to read workflowId and set parentTask on sub-tasks. */
   taskContext?: TaskContext;
-  /** Usage tracking context — identifies what triggered this loop run. */
-  usageContext?: UsageContext;
 }
 
 export interface LoopResult {
   text: string;
   compacted: boolean;
   nearThreshold: boolean;
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
 }
 
 /**
@@ -190,7 +186,10 @@ export async function runAgentLoop(
 
     const userMsg: TimestampedMessage = { timestamp: Date.now(), role: "user", content: userMessage };
     messages.push(userMsg);
-    append(userMsg);
+    // User message is in memory (so the LLM sees it) but NOT written to the session file yet.
+    // It gets persisted after the first successful LLM response — if the provider fails,
+    // the orphaned prompt never hits the file. See Phase 10.1 for context.
+    let userMsgPersisted = false;
 
     // -----------------------------------------------------------------------
     // ReAct loop — the core think → act → observe cycle.
@@ -206,9 +205,13 @@ export async function runAgentLoop(
     // hit MAX_ITERATIONS (safety cap to prevent runaway tool loops).
     // -----------------------------------------------------------------------
     /** Build usage object and record to usage files if context is provided. */
-    function finalizeUsage(): { inputTokens: number; outputTokens: number } | undefined {
+    function finalizeUsage(): { inputTokens: number; outputTokens: number; cachedInputTokens?: number } | undefined {
       if (totalIn === 0 && totalOut === 0) return undefined;
-      const usage = { inputTokens: totalIn, outputTokens: totalOut };
+      const usage = {
+        inputTokens: totalIn,
+        outputTokens: totalOut,
+        ...(totalCachedIn > 0 ? { cachedInputTokens: totalCachedIn } : {}),
+      };
 
       if (opts?.usageContext) {
         const ctx = opts.usageContext;
@@ -219,6 +222,7 @@ export async function runAgentLoop(
           model: lastModel || "unknown",
           in: totalIn,
           out: totalOut,
+          ...(totalCachedIn > 0 ? { cachedIn: totalCachedIn } : {}),
           source: ctx.source,
           sourceId: ctx.sourceId ?? null,
           workflowId: ctx.workflowId ?? null,
@@ -233,6 +237,7 @@ export async function runAgentLoop(
     let iterations = 0;
     let totalIn = 0;
     let totalOut = 0;
+    let totalCachedIn = 0;
     let lastProvider = "";
     let lastModel = "";
 
@@ -252,6 +257,7 @@ export async function runAgentLoop(
       if (response.usage) {
         totalIn += response.usage.inputTokens;
         totalOut += response.usage.outputTokens;
+        if (response.usage.cachedInputTokens) totalCachedIn += response.usage.cachedInputTokens;
       }
       if (response.provider) lastProvider = response.provider;
       if (response.model) lastModel = response.model;
@@ -276,13 +282,13 @@ export async function runAgentLoop(
           role: "assistant",
           content: storedText,
         };
+        if (!userMsgPersisted) { append(userMsg); userMsgPersisted = true; }
         messages.push(assistantMsg);
         append(assistantMsg);
         return {
           text, // Return raw text without prefix
           compacted: compactionResult.compacted,
           nearThreshold: compactionResult.nearThreshold,
-          usage: finalizeUsage(),
         };
       }
 
@@ -304,6 +310,7 @@ export async function runAgentLoop(
             input: tc.input,
           })),
         };
+        if (!userMsgPersisted) { append(userMsg); userMsgPersisted = true; }
         messages.push(assistantToolMsg);
         append(assistantToolMsg);
 
@@ -342,7 +349,6 @@ export async function runAgentLoop(
             text: String(summary),
             compacted: compactionResult.compacted,
             nearThreshold: false,
-            usage: finalizeUsage(),
           };
         }
 
@@ -354,13 +360,13 @@ export async function runAgentLoop(
     // Hit the iteration cap — safety exit to prevent infinite tool loops
     const capMsg = `I got stuck in a loop after ${MAX_ITERATIONS} iterations and couldn't complete your request. Please try rephrasing or breaking it into smaller steps.`;
     const assistantCapMsg: TimestampedMessage = { timestamp: Date.now(), role: "assistant", content: capMsg };
+    if (!userMsgPersisted) { append(userMsg); userMsgPersisted = true; }
     messages.push(assistantCapMsg);
     append(assistantCapMsg);
     return {
       text: capMsg,
       compacted: compactionResult.compacted,
       nearThreshold: compactionResult.nearThreshold,
-      usage: finalizeUsage(),
     };
   });
 }

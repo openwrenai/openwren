@@ -212,7 +212,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     const text = msg.text.trim();
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, client.userId);
+    const commandResponse = handleCommand(text, client.userId, agentId);
     if (commandResponse !== null) {
       sendTo(client, "message", { agentId, text: commandResponse });
       return;

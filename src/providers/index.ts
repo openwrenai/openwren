@@ -69,7 +69,7 @@ export interface LLMResponse {
   text?: string;
   toolCalls?: ToolCall[];
   error?: string;
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
   /** Provider that actually handled the request (important when fallback kicks in). */
   provider?: string;
   /** Model that actually handled the request. */

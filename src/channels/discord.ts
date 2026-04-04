@@ -84,7 +84,7 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     }
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, userId);
+    const commandResponse = handleCommand(text, userId, agentId);
     if (commandResponse !== null) {
       await message.reply(commandResponse);
       return;

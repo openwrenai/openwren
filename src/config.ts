@@ -319,14 +319,19 @@ export function userSessionDir(userId: string): string {
   return path.join(WORKSPACE_DIR, "sessions", userId);
 }
 
-/** Main session file: sessions/{userId}/main.jsonl — shared across all channels */
-export function userSessionPath(userId: string): string {
-  return path.join(userSessionDir(userId), "main.jsonl");
+/** Agent session directory: sessions/{userId}/{agentId}/ — each agent gets its own session space */
+export function agentSessionDir(userId: string, agentId: string): string {
+  return path.join(WORKSPACE_DIR, "sessions", userId, agentId);
 }
 
-/** Session archives directory: sessions/{userId}/archives/ */
-export function userSessionArchiveDir(userId: string): string {
-  return path.join(userSessionDir(userId), "archives");
+/** Main session file: sessions/{userId}/{agentId}/main.jsonl — per-agent, per-user */
+export function userSessionPath(userId: string, agentId: string): string {
+  return path.join(agentSessionDir(userId, agentId), "main.jsonl");
+}
+
+/** Session archives directory: sessions/{userId}/{agentId}/archives/ */
+export function userSessionArchiveDir(userId: string, agentId: string): string {
+  return path.join(agentSessionDir(userId, agentId), "archives");
 }
 
 /** WebUI/CLI session file by UUID: sessions/{userId}/{sessionId}.jsonl */

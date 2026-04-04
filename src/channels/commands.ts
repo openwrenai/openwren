@@ -6,7 +6,7 @@
  */
 
 import * as fs from "fs";
-import { userSessionPath, userSessionArchiveDir } from "../config";
+import { userSessionPath, userSessionArchiveDir, agentSessionDir } from "../config";
 import * as path from "path";
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ import * as path from "path";
  * @param userId - The user who sent the message
  * @returns Response text if command was handled, null if not a command
  */
-export function handleCommand(text: string, userId: string): string | null {
+export function handleCommand(text: string, userId: string, agentId: string): string | null {
   const trimmed = text.trim().toLowerCase();
 
   if (trimmed === "/help") {
@@ -32,7 +32,7 @@ export function handleCommand(text: string, userId: string): string | null {
   }
 
   if (trimmed === "/new" || trimmed === "/reset") {
-    return handleNewSession(userId);
+    return handleNewSession(userId, agentId);
   }
 
   return null;
@@ -45,8 +45,8 @@ export function handleCommand(text: string, userId: string): string | null {
  * @param userId - The user requesting a new session
  * @returns Confirmation message for the user
  */
-function handleNewSession(userId: string): string {
-  const mainPath = userSessionPath(userId);
+function handleNewSession(userId: string, agentId: string): string {
+  const mainPath = userSessionPath(userId, agentId);
 
   if (!fs.existsSync(mainPath)) {
     return "Session is already empty. Nothing to reset.";
@@ -59,7 +59,7 @@ function handleNewSession(userId: string): string {
   }
 
   // Archive current session
-  const archiveDir = userSessionArchiveDir(userId);
+  const archiveDir = userSessionArchiveDir(userId, agentId);
   if (!fs.existsSync(archiveDir)) {
     fs.mkdirSync(archiveDir, { recursive: true });
   }

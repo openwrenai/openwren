@@ -8,7 +8,7 @@ import { createGroq } from "@ai-sdk/groq";
 import { createXai } from "@ai-sdk/xai";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createLLMGateway } from "@llmgateway/ai-sdk-provider";
-import type { ModelMessage } from "@ai-sdk/provider-utils";
+import type { ModelMessage, SystemModelMessage } from "@ai-sdk/provider-utils";
 import type {
   LLMProvider,
   LLMResponse,
@@ -61,13 +61,14 @@ export class AiSdkProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     try {
       const languageModel = this.resolveModel();
-      const sdkTools = this.translateTools(tools);
+      const useCache = this.shouldInjectCache(systemPrompt);
+      const sdkTools = this.translateTools(tools, useCache);
 
-      console.log(`[ai-sdk] ${this.provider}/${this.model} — calling generateText`);
+      console.log(`[ai-sdk] ${this.provider}/${this.model} — calling generateText${useCache ? " (cache)" : ""}`);
       const result = await generateText({
         model: languageModel,
-        system: systemPrompt,
-        messages: messages as ModelMessage[],
+        system: useCache ? this.cacheSystemPrompt(systemPrompt) : systemPrompt,
+        messages: (useCache ? this.cacheMessages(messages) : messages) as ModelMessage[],
         tools: sdkTools,
       });
 
@@ -89,18 +90,57 @@ export class AiSdkProvider implements LLMProvider {
     tools: ToolDefinition[]
   ): AsyncIterable<string> {
     const languageModel = this.resolveModel();
-    const sdkTools = this.translateTools(tools);
+    const useCache = this.shouldInjectCache(systemPrompt);
+    const sdkTools = this.translateTools(tools, useCache);
 
     const result = streamText({
       model: languageModel,
-      system: systemPrompt,
-      messages: messages as ModelMessage[],
+      system: useCache ? this.cacheSystemPrompt(systemPrompt) : systemPrompt,
+      messages: (useCache ? this.cacheMessages(messages) : messages) as ModelMessage[],
       tools: sdkTools,
     });
 
     for await (const delta of result.textStream) {
       yield delta;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prompt caching — Anthropic-only, injects cache_control markers
+  // ---------------------------------------------------------------------------
+
+  /** True when the model is Claude (direct Anthropic or via llmgateway). */
+  private isClaudeModel(): boolean {
+    return this.provider === "anthropic" || this.model.startsWith("claude");
+  }
+
+  /** Check if cache injection should fire — Claude model + prompt above minimum cacheable size. */
+  private shouldInjectCache(systemPrompt: string): boolean {
+    if (!this.isClaudeModel()) return false;
+    // Minimum cacheable prefix: 1,024 tokens for Sonnet, 4,096 for Haiku 4.5 / Opus
+    const estimatedTokens = Math.ceil(systemPrompt.length / 4);
+    const minTokens = this.model.includes("haiku") || this.model.includes("opus") ? 4096 : 1024;
+    return estimatedTokens >= minTokens;
+  }
+
+  /** Wrap system prompt with 1h cache TTL (stable for entire session). */
+  private cacheSystemPrompt(systemPrompt: string): SystemModelMessage {
+    return {
+      role: "system",
+      content: systemPrompt,
+      providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+    };
+  }
+
+  /** Clone messages and mark the second-to-last with 5min cache (stable prefix boundary). */
+  private cacheMessages(messages: Message[]): unknown[] {
+    if (messages.length < 2) return messages;
+    const cached: unknown[] = [...messages];
+    const idx = messages.length - 2;
+    cached[idx] = Object.assign({}, messages[idx], {
+      providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    });
+    return cached;
   }
 
   // ---------------------------------------------------------------------------
@@ -140,12 +180,17 @@ export class AiSdkProvider implements LLMProvider {
   // Tool translation — our ToolDefinition[] → AI SDK tool objects
   // ---------------------------------------------------------------------------
 
-  private translateTools(tools: ToolDefinition[]): ToolSet {
+  private translateTools(tools: ToolDefinition[], cacheLastTool = false): ToolSet {
     const result: ToolSet = {};
-    for (const t of tools) {
+    for (let i = 0; i < tools.length; i++) {
+      const t = tools[i];
+      const isLast = cacheLastTool && i === tools.length - 1;
       result[t.name] = tool({
         description: t.description,
         inputSchema: jsonSchema(t.input_schema),
+        ...(isLast ? {
+          providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+        } : {}),
       });
     }
     return result;
@@ -158,11 +203,17 @@ export class AiSdkProvider implements LLMProvider {
   private translateResponse(result: {
     text: string;
     toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
-    usage: { inputTokens?: number; outputTokens?: number };
+    usage: {
+      inputTokens?: number;
+      outputTokens?: number;
+      inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+    };
   }): LLMResponse {
+    const cachedInputTokens = result.usage?.inputTokenDetails?.cacheReadTokens ?? 0;
     const usage = {
       inputTokens: result.usage?.inputTokens ?? 0,
       outputTokens: result.usage?.outputTokens ?? 0,
+      ...(cachedInputTokens > 0 ? { cachedInputTokens } : {}),
     };
 
     if (result.toolCalls && result.toolCalls.length > 0) {

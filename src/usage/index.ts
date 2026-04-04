@@ -24,6 +24,7 @@ export interface UsageEntry {
   model: string;
   in: number;
   out: number;
+  cachedIn?: number;
   source: "chat" | "task" | "job" | "notify";
   sourceId: string | null;
   workflowId: number | null;
@@ -34,6 +35,7 @@ export interface UsageEntry {
 interface TokenPair {
   in: number;
   out: number;
+  cachedIn?: number;
 }
 
 interface SessionTokenPair extends TokenPair {
@@ -100,26 +102,32 @@ export function recordUsage(entry: UsageEntry): void {
   fs.appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf-8");
 
   // 2. Update summary
+  const cached = entry.cachedIn ?? 0;
+
   const summary = loadSummaryRaw();
   const day = summary.days[date] ?? { in: 0, out: 0 };
   day.in += entry.in;
   day.out += entry.out;
+  if (cached) day.cachedIn = (day.cachedIn ?? 0) + cached;
   summary.days[date] = day;
 
   const agent = summary.byAgent[entry.agent] ?? { in: 0, out: 0 };
   agent.in += entry.in;
   agent.out += entry.out;
+  if (cached) agent.cachedIn = (agent.cachedIn ?? 0) + cached;
   summary.byAgent[entry.agent] = agent;
 
   const provider = summary.byProvider[entry.provider] ?? { in: 0, out: 0 };
   provider.in += entry.in;
   provider.out += entry.out;
+  if (cached) provider.cachedIn = (provider.cachedIn ?? 0) + cached;
   summary.byProvider[entry.provider] = provider;
 
   const sessionKey = entry.sessionId;
   const session = summary.bySession[sessionKey] ?? { in: 0, out: 0, lastActive: date };
   session.in += entry.in;
   session.out += entry.out;
+  if (cached) session.cachedIn = (session.cachedIn ?? 0) + cached;
   session.lastActive = date;
   summary.bySession[sessionKey] = session;
 
@@ -192,22 +200,27 @@ export function rebuildSummary(): UsageSummary {
     const entries = loadDailyEntries(date);
 
     for (const entry of entries) {
+      const cached = entry.cachedIn ?? 0;
+
       // days
       const day = summary.days[date] ?? { in: 0, out: 0 };
       day.in += entry.in;
       day.out += entry.out;
+      if (cached) day.cachedIn = (day.cachedIn ?? 0) + cached;
       summary.days[date] = day;
 
       // byAgent
       const agent = summary.byAgent[entry.agent] ?? { in: 0, out: 0 };
       agent.in += entry.in;
       agent.out += entry.out;
+      if (cached) agent.cachedIn = (agent.cachedIn ?? 0) + cached;
       summary.byAgent[entry.agent] = agent;
 
       // byProvider
       const provider = summary.byProvider[entry.provider] ?? { in: 0, out: 0 };
       provider.in += entry.in;
       provider.out += entry.out;
+      if (cached) provider.cachedIn = (provider.cachedIn ?? 0) + cached;
       summary.byProvider[entry.provider] = provider;
 
       // bySession
@@ -215,6 +228,7 @@ export function rebuildSummary(): UsageSummary {
       const session = summary.bySession[sessionKey] ?? { in: 0, out: 0, lastActive: date };
       session.in += entry.in;
       session.out += entry.out;
+      if (cached) session.cachedIn = (session.cachedIn ?? 0) + cached;
       session.lastActive = date;
       summary.bySession[sessionKey] = session;
     }
