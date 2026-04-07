@@ -248,17 +248,23 @@ Implementation:
 - [x] Session sidebar — new chat button, placeholder session list
 - [x] TopBar mode toggle — Chat/Dashboard button switches between modes
 - [x] Remove Chat from dashboard sidebar
-- [ ] Backend: WS channel sessionId support — accept `sessionId` in WebSocket messages, route to `{uuid}.jsonl` instead of always using `main.jsonl`. Channel sessions (Telegram, Discord) keep using `main.jsonl`. WebUI sessions use UUID files.
-- [ ] Frontend: Fix `api.ts` to support request bodies on POST/PATCH/PUT — needed for creating sessions, renaming, etc.
-- [ ] Frontend: Add types for sessions and WS messages to `lib/types.ts` — session list response, session detail, WS send/receive message shapes
-- [ ] Frontend: Create `useWebSocket` hook + `WebSocketProvider` context — singleton WS connection at app root, reconnection logic, pages subscribe to specific event types (chat: token/message_out, logs: log events)
-- [ ] Agent selector — switch between Atlas, Einstein, Wizard, etc.
-- [ ] Session list — fetch from `GET /api/sessions`, show channel main sessions + WebUI UUID sessions grouped by agent
-- [ ] Chat interface — send messages via WS with `sessionId`, stream responses token-by-token, abort runs mid-stream
-- [ ] Session header — small left-aligned session title, clickable dropdown with Rename, Delete, Reset, Force compaction
-- [ ] Session history viewer — load conversation transcript from `GET /api/sessions/:id`
+- [x] Backend: WS channel sessionId support — accept `sessionId` in WebSocket messages, route to `{uuid}.jsonl` instead of always using `main.jsonl`. Channel sessions (Telegram, Discord) keep using `main.jsonl`. WebUI sessions use UUID files.
+- [x] Frontend: Fix `api.ts` to support request bodies on POST/PATCH/PUT — needed for creating sessions, renaming, etc.
+- [x] Frontend: Add types for sessions and WS messages to `lib/types.ts` — session list response, session detail, WS send/receive message shapes
+- [x] Frontend: Create `useWebSocket` hook + `WebSocketProvider` context — singleton WS connection at app root, reconnection logic, pages subscribe to specific event types (chat: token/message_out, logs: log events)
+- [x] Agent selector — switch between Atlas, Einstein, Wizard, etc.
+- [x] Session list — fetch from `GET /api/sessions`, show WebUI UUID sessions filtered by active agent
+- [x] Chat interface — send messages via WS with `sessionId`, stream responses token-by-token, thinking indicator
+- [x] Session header — session title and agent name shown at top of chat area
+- [ ] Lazy session creation — "New Chat" shows a blank centered chat (like Claude.ai) without creating a file. Session is only created after first message is sent and agent replies. Agent auto-names the session.
+- [ ] Two-state chat input — **Fresh chat:** textarea centered vertically+horizontally on screen, auto-focused, agent picker inside the input area (bottom-right, like Claude.ai's model picker). **Active chat:** textarea pinned to bottom of screen, agent picker hidden (agent locked for session), messages above.
+- [ ] Auto-growing textarea — textarea expands upward as user adds lines with Shift+Enter. Works in both centered (fresh) and bottom-pinned (active) states. In active state, growing textarea shrinks the message area above it. No fixed height limit.
+- [ ] Session history loading — load conversation transcript from session JSONL when selecting an existing session
+- [ ] Clean up ghost sessions — delete empty session files created by the eager "New Chat" approach
+- [ ] Session header dropdown — clickable with Rename, Delete, Reset, Force compaction actions
 - [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
 - [ ] Session actions — reset session, force compaction, view archive list
+- [ ] Abort button — cancel agent processing mid-stream
 
 Agent Pause now and let user review progress so far...
 

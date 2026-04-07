@@ -17,8 +17,9 @@
 
 import * as crypto from "crypto";
 import { WebSocket } from "ws";
-import { config } from "../config";
+import { config, userNamedSessionPath } from "../config";
 import { runAgentLoop } from "../agent/loop";
+import { touchSession } from "../sessions/store";
 import { handleCommand } from "./commands";
 import { bus, BusEventName, BusEvents } from "../events";
 import { setWsConnectionHandler } from "../gateway/server";
@@ -31,8 +32,9 @@ import type { Channel } from "./types";
 /** Send a chat message to an agent. */
 interface WsSendMessage {
   type: "message";
-  agentId: string; // which agent to talk to (e.g. "atlas")
-  text: string;    // the user's message
+  agentId: string;     // which agent to talk to (e.g. "atlas")
+  text: string;        // the user's message
+  sessionId?: string;  // UUID session ID for WebUI sessions. Omit or "main" for default channel session.
 }
 
 /** Reply to a tool confirmation prompt (shell command approval). */
@@ -257,9 +259,21 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       });
     };
 
+    // Resolve session file — UUID sessions use a custom file, otherwise default (main.jsonl)
+    const sessionId = msg.sessionId && msg.sessionId !== "main" ? msg.sessionId : undefined;
+    const sessionOpts = sessionId
+      ? { sessionFile: userNamedSessionPath(client.userId, sessionId) }
+      : {};
+
+    // Touch session updatedAt so session list stays sorted by recency
+    if (sessionId) {
+      touchSession(client.userId, sessionId);
+    }
+
     try {
       const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
-        usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
+        ...sessionOpts,
+        usageContext: { source: "chat", userId: client.userId, sessionId: sessionId ?? "main" },
       });
       console.log(
         `[websocket] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
