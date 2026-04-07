@@ -80,6 +80,8 @@ export interface TaskContext {
 export interface RunLoopOptions {
   /** Override session file path (for isolated job sessions). */
   sessionFile?: string;
+  /** Origin channel — stored on user messages for display (webui, telegram, discord, scheduler). */
+  channel?: string;
   /** Skip idle/daily resets and compaction (for job sessions). */
   skipMaintenance?: boolean;
   /** Prefix to prepend to stored assistant response (not returned in LoopResult.text). */
@@ -90,6 +92,29 @@ export interface RunLoopOptions {
   taskContext?: TaskContext;
   /** Usage tracking context — identifies what triggered this loop run. */
   usageContext?: UsageContext;
+  /**
+   * Stream callback — enables token-by-token streaming for the WebUI.
+   *
+   * When provided (and the provider supports chatStream), the agent loop uses
+   * streaming instead of the blocking chat() call. Each text delta from the LLM
+   * triggers this callback. The WS channel passes a callback that sends each
+   * delta directly to the requesting client: sendTo(client, 'token', {text}).
+   *
+   * When absent (Telegram, Discord, scheduler, orchestrator), the loop uses
+   * the non-streaming chat() path and returns the full response at once.
+   */
+  streamCallback?: (delta: string) => void;
+  /**
+   * Tool use callback — called when a tool call starts, before execution.
+   * Fires in BOTH streaming and non-streaming paths so tool events are
+   * emitted regardless of whether text is streamed.
+   */
+  onToolUse?: (toolCallId: string, toolName: string, args: Record<string, unknown>) => void;
+  /**
+   * Tool result callback — called after a tool finishes executing.
+   * Fires in BOTH streaming and non-streaming paths.
+   */
+  onToolResult?: (toolCallId: string, toolName: string, result: string) => void;
 }
 
 export interface LoopResult {
@@ -188,7 +213,12 @@ export async function runAgentLoop(
       };
     }
 
-    const userMsg: TimestampedMessage = { timestamp: Date.now(), role: "user", content: userMessage };
+    const userMsg: TimestampedMessage = {
+      timestamp: Date.now(),
+      role: "user",
+      content: userMessage,
+      ...(opts?.channel ? { channel: opts.channel } : {}),
+    };
     messages.push(userMsg);
     append(userMsg);
 
@@ -236,12 +266,139 @@ export async function runAgentLoop(
     let lastProvider = "";
     let lastModel = "";
 
+    // Streaming guard: both conditions must be true:
+    // 1. The caller provided a streamCallback (only WebUI WS channel does)
+    // 2. The provider implements chatStream (all AI SDK providers do)
+    // When either is false, we skip straight to the non-streaming chat() path.
+    const useStreaming = !!opts?.streamCallback && !!provider.chatStream;
+
     while (iterations < MAX_ITERATIONS) {
       iterations++;
       console.log(`[loop:${agentId}] Iteration ${iterations}/${MAX_ITERATIONS}`);
 
       // Inject human-readable timestamps into a copy for the LLM — stored messages are untouched
       const llmMessages = injectTimestamps(messages, config.timezone);
+
+      // -----------------------------------------------------------------------
+      // Streaming path — uses chatStream() (fullStream) to get text deltas
+      // and tool calls from a single LLM call. Text deltas are forwarded to
+      // the streamCallback in real-time. Tool calls are collected and executed
+      // the same way as the non-streaming path.
+      // -----------------------------------------------------------------------
+      if (useStreaming) {
+        const textChunks: string[] = [];
+        const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+        let streamFailed = false;
+
+        // Try streaming — if it fails (e.g. provider doesn't support stream:true
+        // with tools, like llmgateway/mistral), we set streamFailed=true and fall
+        // through to the non-streaming chat() path below. The user sees a wall of
+        // text instead of streaming, but the request still succeeds.
+        try {
+          for await (const part of provider.chatStream!(systemPrompt, llmMessages, tools)) {
+            if (part.type === "text") {
+              textChunks.push(part.text);
+              opts!.streamCallback!(part.text);
+            } else if (part.type === "tool-call") {
+              toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.args });
+            } else if (part.type === "finish") {
+              totalIn += part.usage.inputTokens;
+              totalOut += part.usage.outputTokens;
+              lastProvider = provider.name.split("/")[0];
+              lastModel = provider.name.split("/")[1];
+            }
+          }
+        } catch (streamErr) {
+          // Graceful degradation — log the error and fall through to chat()
+        const msg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        console.warn(`[loop:${agentId}] Streaming failed, falling back to chat(): ${msg}`);
+        streamFailed = true;
+        }
+
+        // Stream succeeded — process the collected results
+        if (!streamFailed) {
+
+        // ---- Tool calls from stream — execute and loop again ----
+        if (toolCalls.length > 0) {
+          const assistantToolMsg: TimestampedMessage = {
+            timestamp: Date.now(),
+            role: "assistant",
+            content: toolCalls.map((tc) => ({
+              type: "tool-call" as const,
+              toolCallId: tc.id,
+              toolName: tc.name,
+              input: tc.input,
+            })),
+          };
+          messages.push(assistantToolMsg);
+          append(assistantToolMsg);
+
+          const toolResults = await Promise.all(
+            toolCalls.map(async (tc) => {
+              console.log(`[loop:${agentId}] Tool call: ${tc.name}`, summarizeToolInput(tc.name, tc.input));
+              // Notify the WS client that a tool call is starting (shows spinner card)
+              opts?.onToolUse?.(tc.id, tc.name, tc.input);
+              const execResult = await executeTool(tc.name, tc.input, agentId, confirm, opts?.taskContext);
+              console.log(`[loop:${agentId}] Tool result: ${tc.name} →`, summarizeToolResult(tc.name, execResult));
+              // Notify the WS client that the tool finished (swaps spinner for checkmark)
+              opts?.onToolResult?.(tc.id, tc.name, execResult);
+              return {
+                type: "tool-result" as const,
+                toolCallId: tc.id,
+                toolName: tc.name,
+                output: { type: "text" as const, value: execResult },
+              };
+            })
+          );
+
+          const toolResultMsg: TimestampedMessage = {
+            timestamp: Date.now(),
+            role: "tool" as const,
+            content: toolResults,
+          };
+          messages.push(toolResultMsg);
+          append(toolResultMsg);
+
+          const taskCompleted = toolCalls.some((tc) => tc.name === "complete_task");
+          if (taskCompleted) {
+            const summary = toolCalls.find((tc) => tc.name === "complete_task")?.input?.summary ?? "";
+            return {
+              text: String(summary),
+              compacted: compactionResult.compacted,
+              nearThreshold: false,
+              usage: finalizeUsage(),
+            };
+          }
+
+          continue;
+        }
+
+        // ---- Text response from stream — loop ends ----
+        const fullText = textChunks.join("");
+        const text = cleanModelResponse(fullText);
+        const storedText = opts?.storePrefix ? opts.storePrefix + text : text;
+        const assistantMsg: TimestampedMessage = {
+            timestamp: Date.now(),
+          role: "assistant",
+          content: storedText,
+          ...(opts?.channel === "scheduler" ? { channel: "scheduler" } : {}),
+          };
+        messages.push(assistantMsg);
+        append(assistantMsg);
+        return {
+            text,
+          compacted: compactionResult.compacted,
+          nearThreshold: compactionResult.nearThreshold,
+          usage: finalizeUsage(),
+          };
+        } // end if (!streamFailed)
+      } // end if (useStreaming)
+
+      // -----------------------------------------------------------------------
+      // Non-streaming path — original chat() call.
+      // Used by: Telegram, Discord, scheduler, orchestrator, and as a fallback
+      // when streaming fails (streamFailed=true above).
+      // -----------------------------------------------------------------------
 
       // ---- LLM call ----
       // Sends: system prompt + full conversation history + tool definitions.
@@ -257,16 +414,10 @@ export async function runAgentLoop(
       if (response.model) lastModel = response.model;
 
       if (response.type === "error") {
-        // Throw so callers can handle appropriately:
-        // - Channels (Telegram/Discord/WS): catch and send a friendly error message
-        // - Scheduler (runner.ts): catch, classify as transient/permanent, retry or disable
-        // - Orchestrator (runner.ts): catch, mark task as failed, emit task_failed
         throw new Error(response.error);
       }
 
       // ---- Text response — loop ends ----
-      // The LLM decided to reply with words instead of calling a tool.
-      // This is the only successful exit from the loop.
       if (response.type === "text") {
         console.log(`[loop:${agentId}] Raw model response: ${(response.text ?? "").slice(0, 300)}`);
         const text = cleanModelResponse(response.text ?? "");
@@ -275,11 +426,12 @@ export async function runAgentLoop(
           timestamp: Date.now(),
           role: "assistant",
           content: storedText,
+          ...(opts?.channel === "scheduler" ? { channel: "scheduler" } : {}),
         };
         messages.push(assistantMsg);
         append(assistantMsg);
         return {
-          text, // Return raw text without prefix
+          text,
           compacted: compactionResult.compacted,
           nearThreshold: compactionResult.nearThreshold,
           usage: finalizeUsage(),
@@ -287,13 +439,7 @@ export async function runAgentLoop(
       }
 
       // ---- Tool use — execute and loop again ----
-      // The LLM returned one or more tool calls. Each has:
-      //   id: unique ID (echoed back in tool-result so the LLM can match request → response)
-      //   name: which tool to call (e.g. "read_file", "shell_exec")
-      //   input: arguments the LLM generated based on the tool's input_schema
       if (response.type === "tool_use" && response.toolCalls?.length) {
-        // Save the LLM's tool-call blocks to session history — the LLM needs to
-        // see its own requests in the conversation on the next iteration
         const assistantToolMsg: TimestampedMessage = {
           timestamp: Date.now(),
           role: "assistant",
@@ -307,13 +453,15 @@ export async function runAgentLoop(
         messages.push(assistantToolMsg);
         append(assistantToolMsg);
 
-        // Execute all tool calls and collect results.
-        // Each tool returns a string — the result the LLM will see on the next iteration.
         const toolResults = await Promise.all(
           response.toolCalls.map(async (tc) => {
             console.log(`[loop:${agentId}] Tool call: ${tc.name}`, summarizeToolInput(tc.name, tc.input));
+            // Notify the WS client that a tool call is starting (no-op when callbacks are undefined)
+            opts?.onToolUse?.(tc.id, tc.name, tc.input);
             const execResult = await executeTool(tc.name, tc.input, agentId, confirm, opts?.taskContext);
             console.log(`[loop:${agentId}] Tool result: ${tc.name} →`, summarizeToolResult(tc.name, execResult));
+            // Notify the WS client that the tool finished (no-op when callbacks are undefined)
+            opts?.onToolResult?.(tc.id, tc.name, execResult);
             return {
               type: "tool-result" as const,
               toolCallId: tc.id,
@@ -323,7 +471,6 @@ export async function runAgentLoop(
           })
         );
 
-        // Save tool results to session history with role "tool"
         const toolResultMsg: TimestampedMessage = {
           timestamp: Date.now(),
           role: "tool" as const,
@@ -332,9 +479,6 @@ export async function runAgentLoop(
         messages.push(toolResultMsg);
         append(toolResultMsg);
 
-        // If complete_task was called, the task is done — break immediately.
-        // No need to send results back to the LLM for another iteration that
-        // would just produce a useless text summary nobody reads.
         const taskCompleted = response.toolCalls.some((tc) => tc.name === "complete_task");
         if (taskCompleted) {
           const summary = response.toolCalls.find((tc) => tc.name === "complete_task")?.input?.summary ?? "";
@@ -346,7 +490,6 @@ export async function runAgentLoop(
           };
         }
 
-        // Loop again — LLM will see the tool results and either call more tools or respond
         continue;
       }
     }

@@ -6,7 +6,7 @@
  */
 
 import * as fs from "fs";
-import { userSessionPath, userSessionArchiveDir } from "../config";
+import { agentSessionPath, agentSessionArchiveDir } from "../config";
 import * as path from "path";
 
 // ---------------------------------------------------------------------------
@@ -18,9 +18,10 @@ import * as path from "path";
  *
  * @param text - The raw message text from the user
  * @param userId - The user who sent the message
+ * @param agentId - The agent this session belongs to
  * @returns Response text if command was handled, null if not a command
  */
-export function handleCommand(text: string, userId: string): string | null {
+export function handleCommand(text: string, userId: string, agentId: string): string | null {
   const trimmed = text.trim().toLowerCase();
 
   if (trimmed === "/help") {
@@ -32,34 +33,35 @@ export function handleCommand(text: string, userId: string): string | null {
   }
 
   if (trimmed === "/new" || trimmed === "/reset") {
-    return handleNewSession(userId);
+    return handleNewSession(userId, agentId);
   }
 
   return null;
 }
 
 /**
- * Archive the current main.jsonl and start a fresh session.
+ * Archive the current session.jsonl and start a fresh session.
  * Moves the current session to archives/ with a timestamp suffix.
  *
  * @param userId - The user requesting a new session
+ * @param agentId - The agent whose session to reset
  * @returns Confirmation message for the user
  */
-function handleNewSession(userId: string): string {
-  const mainPath = userSessionPath(userId);
+function handleNewSession(userId: string, agentId: string): string {
+  const sessionFile = agentSessionPath(userId, agentId);
 
-  if (!fs.existsSync(mainPath)) {
+  if (!fs.existsSync(sessionFile)) {
     return "Session is already empty. Nothing to reset.";
   }
 
   // Check if the file has any content
-  const content = fs.readFileSync(mainPath, "utf-8").trim();
+  const content = fs.readFileSync(sessionFile, "utf-8").trim();
   if (!content) {
     return "Session is already empty. Nothing to reset.";
   }
 
   // Archive current session
-  const archiveDir = userSessionArchiveDir(userId);
+  const archiveDir = agentSessionArchiveDir(userId, agentId);
   if (!fs.existsSync(archiveDir)) {
     fs.mkdirSync(archiveDir, { recursive: true });
   }
@@ -71,11 +73,11 @@ function handleNewSession(userId: string): string {
   const h = String(now.getUTCHours()).padStart(2, "0");
   const mi = String(now.getUTCMinutes()).padStart(2, "0");
   const s = String(now.getUTCSeconds()).padStart(2, "0");
-  const archiveName = `main-${y}-${mo}-${d}_${h}-${mi}-${s}.jsonl`;
+  const archiveName = `session-${y}-${mo}-${d}_${h}-${mi}-${s}.jsonl`;
   const archivePath = path.join(archiveDir, archiveName);
 
-  fs.renameSync(mainPath, archivePath);
-  console.log(`[sessions] Archived main session to archives/${archiveName}`);
+  fs.renameSync(sessionFile, archivePath);
+  console.log(`[sessions] Archived ${agentId} session to archives/${archiveName}`);
 
   return "Session archived. Starting fresh.";
 }

@@ -52,10 +52,11 @@ export interface SkillLoadResult {
 const catalogCache = new Map<string, Map<string, ParsedSkill>>();
 
 // ---------------------------------------------------------------------------
-// Binary check cache — binaries don't appear/disappear mid-run
+// Binary check cache — 5 minute TTL so newly installed binaries are detected
 // ---------------------------------------------------------------------------
 
-const binCache = new Map<string, boolean>();
+const BIN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const binCache = new Map<string, { available: boolean; checkedAt: number }>();
 
 function isBinaryAvailable(name: string): boolean {
   // Validate binary name — only safe characters allowed
@@ -64,14 +65,17 @@ function isBinaryAvailable(name: string): boolean {
     return false;
   }
 
-  if (binCache.has(name)) return binCache.get(name)!;
+  const cached = binCache.get(name);
+  if (cached && Date.now() - cached.checkedAt < BIN_CACHE_TTL_MS) {
+    return cached.available;
+  }
 
   try {
     execSync(`which ${name}`, { stdio: "ignore" });
-    binCache.set(name, true);
+    binCache.set(name, { available: true, checkedAt: Date.now() });
     return true;
   } catch {
-    binCache.set(name, false);
+    binCache.set(name, { available: false, checkedAt: Date.now() });
     return false;
   }
 }
@@ -218,11 +222,22 @@ function passesGates(skill: ParsedSkill, agentId: string, quiet = false, hasTask
     return false;
   }
 
-  // 2. Config override: skills.entries.<name>.enabled
-  const configEntry = config.skills?.entries?.[skill.name];
-  if (configEntry && configEntry.enabled === false) {
-    if (!quiet) console.log(`[skills] ${skill.name}: disabled in config`);
-    return false;
+  // 2. Per-agent override (highest priority) then global config override
+  const agentSkillOverride = config.agents[agentId]?.skills?.[skill.name];
+  if (agentSkillOverride?.enabled !== undefined) {
+    // Per-agent override exists — it wins
+    if (agentSkillOverride.enabled === false) {
+      if (!quiet) console.log(`[skills] ${skill.name}: disabled for agent ${agentId}`);
+      return false;
+    }
+    // agentSkillOverride.enabled === true — explicitly enabled for this agent, skip global check
+  } else {
+    // No per-agent override — fall back to global
+    const configEntry = config.skills?.entries?.[skill.name];
+    if (configEntry && configEntry.enabled === false) {
+      if (!quiet) console.log(`[skills] ${skill.name}: disabled in config`);
+      return false;
+    }
   }
 
   // 3. OS gate (cheapest — string compare)
@@ -421,6 +436,124 @@ export function buildSkillCatalog(agentId: string, quiet = false, hasTaskContext
   catalogCache.set(agentId, agentCache);
 
   return { catalog, autoloaded };
+}
+
+// ---------------------------------------------------------------------------
+// Skill inventory — returns all skills with gate status (for API/UI)
+// ---------------------------------------------------------------------------
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  autoload: boolean;
+  enabled: boolean;
+  blocked: boolean;
+  blockReason: string | null;
+  source: string;
+}
+
+/**
+ * Returns all skills visible to an agent with their gate status.
+ * Unlike buildSkillCatalog(), this doesn't filter — it reports.
+ */
+export function getSkillInventory(agentId: string): SkillInfo[] {
+  const seen = new Map<string, { skill: ParsedSkill; source: string }>();
+
+  // Scan in reverse precedence order
+  const allowBundled = config.skills?.allowBundled;
+  for (const skill of scanSkillDir(BUNDLED_SKILLS_DIR)) {
+    if (allowBundled && !allowBundled.includes(skill.name)) continue;
+    seen.set(skill.name, { skill, source: "bundled" });
+  }
+
+  for (const extraDir of config.skills?.load?.extraDirs ?? []) {
+    for (const skill of scanSkillDir(resolvePath(extraDir))) {
+      seen.set(skill.name, { skill, source: extraDir });
+    }
+  }
+
+  for (const skill of scanSkillDir(path.join(config.workspaceDir, "skills"))) {
+    seen.set(skill.name, { skill, source: "global" });
+  }
+
+  for (const skill of scanSkillDir(path.join(config.workspaceDir, "agents", agentId, "skills"))) {
+    seen.set(skill.name, { skill, source: "per-agent" });
+  }
+
+  const results: SkillInfo[] = [];
+
+  for (const { skill, source } of seen.values()) {
+    const blockReason = getBlockReason(skill, agentId);
+
+    // Determine enabled state: per-agent override > global override > frontmatter default
+    const agentOverride = config.agents[agentId]?.skills?.[skill.name];
+    const globalEntry = config.skills?.entries?.[skill.name];
+    let enabledByConfig: boolean;
+    if (agentOverride?.enabled !== undefined) {
+      // Per-agent override wins
+      enabledByConfig = agentOverride.enabled;
+    } else if (globalEntry?.enabled !== undefined) {
+      // Global override
+      enabledByConfig = globalEntry.enabled !== false;
+    } else {
+      // Frontmatter default
+      enabledByConfig = skill.enabled;
+    }
+
+    results.push({
+      name: skill.name,
+      description: skill.description,
+      autoload: skill.autoload,
+      enabled: enabledByConfig && !blockReason,
+      blocked: !!blockReason,
+      blockReason,
+      source,
+    });
+  }
+
+  // Sort: enabled first, then alphabetical
+  results.sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return results;
+}
+
+/**
+ * Checks system gates and returns the first block reason, or null if all pass.
+ * Only checks non-togglable gates (OS, config, bins, role, tools, env).
+ * Does NOT check the enabled/config-override gates — those are user-toggleable.
+ */
+function getBlockReason(skill: ParsedSkill, agentId: string): string | null {
+  if (skill.requires.os && skill.requires.os !== process.platform) {
+    return `Requires OS: ${skill.requires.os}`;
+  }
+  for (const dotPath of skill.requires.config) {
+    const value = dotPath.split(".").reduce((obj: any, key) => obj?.[key], config);
+    if (!value) return `Missing: config:${dotPath}`;
+  }
+  if (skill.requires.role.length > 0) {
+    const agentRole = config.agents[agentId]?.role;
+    if (!agentRole || !skill.requires.role.includes(agentRole)) {
+      return `Requires role: ${skill.requires.role.join(" or ")}`;
+    }
+  }
+  if (skill.requires.tools.length > 0) {
+    const permissions = getAgentPermissions(agentId);
+    if (permissions) {
+      for (const tool of skill.requires.tools) {
+        if (!permissions.includes(tool)) return `Missing: tool:${tool}`;
+      }
+    }
+  }
+  for (const key of skill.requires.env) {
+    if (!process.env[key]) return `Missing: env:${key}`;
+  }
+  for (const bin of skill.requires.bins) {
+    if (!isBinaryAvailable(bin)) return `Missing: bin:${bin}`;
+  }
+  return null;
 }
 
 /**

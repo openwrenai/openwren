@@ -9,7 +9,7 @@
 import { config } from "../config";
 import { runAgentLoop } from "../agent/loop";
 import type { RunLoopOptions } from "../agent/loop";
-import { jobSessionFilePath, pruneJobSession } from "../agent/history";
+import { jobSessionFilePath, pruneJobSession, appendMessage } from "../agent/history";
 import { deliverMessage } from "../channels";
 import { bus } from "../events";
 import type { ScheduledJob, RunEntry } from "./store";
@@ -98,11 +98,11 @@ export async function executeJob(
       // Isolated: use separate job session file, no maintenance, no store prefix
       const sessionFile = jobSessionFilePath(job.agent, jobId);
       prompt = job.prompt;
-      loopOpts = { sessionFile, skipMaintenance: true, usageContext };
+      loopOpts = { sessionFile, skipMaintenance: true, channel: "scheduler", usageContext };
     } else {
       // Main session: prefix prompt for traceability, prefix response for display
-      prompt = `[job:${jobId}] ${job.prompt}`;
-      loopOpts = { storePrefix: `[${job.name}] `, usageContext };
+      prompt = `[${job.name}] ${job.prompt}`;
+      loopOpts = { storePrefix: `[${job.name}] `, channel: "scheduler", usageContext };
     }
 
     const loopResult = await runAgentLoop(
@@ -119,12 +119,39 @@ export async function executeJob(
     const deliveryText = `[${job.name}] ${rawText}`;
     const durationMs = Date.now() - startMs;
 
+    // Emit bus event so WebUI picks up the job result live
+    bus.emit("message_out", {
+      channel: "scheduler",
+      userId: job.user,
+      agentId: job.agent,
+      agentName: agentConfig.name,
+      text: rawText,
+      compacted: loopResult.compacted,
+      nearThreshold: loopResult.nearThreshold,
+      timestamp: Date.now(),
+    });
+
     // Prune isolated job session if needed
     if (job.isolated) {
       pruneJobSession(
         jobSessionFilePath(job.agent, jobId),
         config.scheduler.runHistory.sessionRetention,
       );
+
+      // Persist isolated job messages to main session for WebUI display.
+      // Marked isolated: true so loadSession() filters them out before sending to LLM.
+      appendMessage(job.user, job.agent, {
+        role: "user",
+        content: `[${job.name}] ${job.prompt}`,
+        channel: "scheduler",
+        isolated: true,
+      });
+      appendMessage(job.user, job.agent, {
+        role: "assistant",
+        content: rawText,
+        channel: "scheduler",
+        isolated: true,
+      });
     }
 
     // Check for HEARTBEAT_OK suppression

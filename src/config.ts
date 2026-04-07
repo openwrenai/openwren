@@ -35,10 +35,12 @@ export interface AgentConfig {
   fallback?: string;    // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
   description?: string; // One-liner shown to managers via list_team and system prompt injection
   role?: string; // "manager" or "worker" (default: "worker") — maps to roles.{name} for tool permissions
+  skills?: Record<string, { enabled?: boolean }>; // Per-agent skill overrides. Absent = inherit global.
 }
 
 /** Team config — defines manager-worker relationships. Independent of any single agent. */
 export interface TeamConfig {
+  name?: string;     // display name (e.g. "Görans Team"). Falls back to team ID if unset.
   manager: string;   // agent ID of the team manager
   members: string[]; // agent IDs in the team
 }
@@ -319,19 +321,19 @@ export function userSessionDir(userId: string): string {
   return path.join(WORKSPACE_DIR, "sessions", userId);
 }
 
-/** Main session file: sessions/{userId}/main.jsonl — shared across all channels */
-export function userSessionPath(userId: string): string {
-  return path.join(userSessionDir(userId), "main.jsonl");
+/** Per-agent session directory: sessions/{userId}/{agentId}/ */
+export function agentSessionDir(userId: string, agentId: string): string {
+  return path.join(WORKSPACE_DIR, "sessions", userId, agentId);
 }
 
-/** Session archives directory: sessions/{userId}/archives/ */
-export function userSessionArchiveDir(userId: string): string {
-  return path.join(userSessionDir(userId), "archives");
+/** Per-agent session file: sessions/{userId}/{agentId}/session.jsonl */
+export function agentSessionPath(userId: string, agentId: string): string {
+  return path.join(agentSessionDir(userId, agentId), "session.jsonl");
 }
 
-/** WebUI/CLI session file by UUID: sessions/{userId}/{sessionId}.jsonl */
-export function userNamedSessionPath(userId: string, sessionId: string): string {
-  return path.join(userSessionDir(userId), `${sessionId}.jsonl`);
+/** Per-agent session archives: sessions/{userId}/{agentId}/archives/ */
+export function agentSessionArchiveDir(userId: string, agentId: string): string {
+  return path.join(agentSessionDir(userId, agentId), "archives");
 }
 
 /** Memory directory for an agent */
@@ -537,20 +539,22 @@ function ensureWorkspace(): void {
   }
 }
 
-function loadConfig(): Config {
-  // 1. Ensure workspace exists, generate templates if first run
-  ensureWorkspace();
-
-  // 2. Load workspace .env — single source of truth for all secrets
+/**
+ * Parses openwren.json + .env into a complete Config object.
+ * Pure function — no side effects beyond reading files.
+ * Called by loadConfig() at boot and reloadConfig() on hot-reload.
+ */
+function parseConfig(): Config {
+  // 1. Load workspace .env — single source of truth for all secrets
   const workspaceEnvPath = path.join(WORKSPACE_DIR, ".env");
   if (fs.existsSync(workspaceEnvPath)) {
     dotenv.config({ path: workspaceEnvPath, override: true, quiet: true });
   }
 
-  // 3. Start with defaults
+  // 2. Start with defaults
   const merged = JSON.parse(JSON.stringify(defaultConfig));
 
-  // 4. Read and apply user overrides from openwren.json
+  // 3. Read and apply user overrides from openwren.json
   const configPath = path.join(WORKSPACE_DIR, "openwren.json");
   if (fs.existsSync(configPath)) {
     const raw = fs.readFileSync(configPath, "utf-8");
@@ -561,11 +565,10 @@ function loadConfig(): Config {
     }
   }
 
-  // 5. Post-processing
+  // 4. Post-processing
   // Resolve timezone — fall back to system local if not set
   if (!merged.timezone) {
     merged.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    console.log(`[config] No timezone set — using system default: ${merged.timezone}`);
   }
 
   // Validate defaultModel format — must be "provider/model"
@@ -626,15 +629,30 @@ function loadConfig(): Config {
     }
   }
 
-  const finalConfig = {
-    ...merged,
-    workspaceDir: WORKSPACE_DIR,
-  };
+  return { ...merged, workspaceDir: WORKSPACE_DIR };
+}
 
-  return finalConfig;
+function loadConfig(): Config {
+  ensureWorkspace();
+  const cfg = parseConfig();
+  // Log timezone only at boot
+  if (!cfg.timezone) {
+    console.log(`[config] No timezone set — using system default`);
+  }
+  return cfg;
 }
 
 export const config = loadConfig();
+
+/**
+ * Hot-reload config from disk. Mutates the existing `config` object in place
+ * so all modules that import it see updates immediately. No restart needed.
+ */
+export function reloadConfig(): void {
+  const fresh = parseConfig();
+  Object.assign(config, fresh);
+  console.log(`[config] Reloaded (${Object.keys(config.agents).length} agents)`);
+}
 
 // ---------------------------------------------------------------------------
 // User resolution — maps channel sender IDs to user IDs
