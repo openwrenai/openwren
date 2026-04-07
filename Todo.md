@@ -212,23 +212,57 @@ A local browser dashboard at `http://127.0.0.1:3000`. Opened via `openwren dashb
 
 **Project structure:** `webui/` at the top level with its own `package.json`, separate from the Node.js backend. Clean separation — frontend and backend only communicate via WebSocket and REST API. Never import backend code from frontend or vice versa. This structure also allows wrapping in Electron or Tauri later for a native desktop app (`.dmg`, `.exe`) without any rewrite.
 
-**Setup steps:**
-- [ ] Create `webui/` with Vite + React 19 + TypeScript
-- [ ] Run `npx shadcn@latest init` inside `webui/` — configures Tailwind, component system, theming
-- [ ] Add `@fastify/static` to gateway — serve `webui/dist/` as static files in production
-- [ ] Vite dev proxy config — forward `/api` and `/ws` to the running Fastify gateway during development
-- [ ] `openwren dashboard` CLI command — opens `http://localhost:3000` in default browser
-- [ ] Add `webui` build step to project build script
+**Step 1 — Scaffolding**
+- [x] Create `webui/` with Vite + React 19 + TypeScript — use `npx create-vite@latest webui -t react-ts` (NOT `npm create vite@latest webui -- --template react-ts` — the `--` separator breaks the template flag)
+- [x] Run `npx shadcn@latest init` inside `webui/` — configures Tailwind, component system, theming
+- [x] Add `@fastify/static` to gateway — serve `webui/dist/` as static files in production
+- [x] Vite dev proxy config — forward `/api` and `/ws` to the running Fastify gateway during development
+- [x] `openwren dashboard` CLI command — convenience shortcut that opens `http://localhost:3000` in default browser (dashboard is already running with the gateway)
+- [x] Log on startup: `[gateway] Dashboard available at http://127.0.0.1:3000`
+- [x] Add `webui` build step to project build script
+- [x] TanStack Router setup with all routes + grouped sidebar layout + top bar + dark theme
 
-**Chat & Sessions**
-- [ ] Chat interface — send messages, stream responses token-by-token, abort runs mid-stream
-- [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
+Agent Pause now and let user review progress so far...
+
+**Step 2 — Dashboard**
+- [x] `GET /api/status` endpoint — uptime, agent count, active sessions, memory file count, channel status
+- [x] System Status card — uptime, agents, sessions, memory files
+- [x] Token Usage Today card — input, output, cached, estimated cost (from `GET /api/usage`)
+- [x] Channels card — table of connected channels, bot name, status, last message
+- [ ] Recent Activity card — reverse-chronological list of recent events (chat, jobs, workflows)
+- [x] Scheduled Jobs card — upcoming jobs with next run time and status (from `GET /api/schedules`)
+- [x] Auto-refresh every 30 seconds
+- [x] Agents card — agent list with name, model, role badge (capped at 10 with "View all" link)
+- [x] Token-in-URL auth — `?token=xxx` saved to localStorage, sent as Bearer on all API calls
+- [x] `openwren dashboard` CLI includes token in URL
+
+Agent Pause now and let user review progress so far...
+
+**Step 3 — Chat & Sessions (two-mode layout)**
+
+The Chat page is a full-screen experience with its own layout — not a page inside the dashboard sidebar. When navigating to `/chat`, the dashboard sidebar is replaced by a session sidebar (conversation history, agent selector, new chat button). The top bar stays the same in both modes. See `design.md` "Two-Mode Layout" section for wireframes and technical details.
+
+Implementation:
+- [x] Refactor root route — TopBar moves to root layout, dashboard sidebar becomes a layout route under root. Chat layout is a sibling layout route under root. Both render TopBar via the shared root.
+- [x] `ChatLayout` component — session sidebar (left) + chat area (right). Lives in `components/layout/ChatLayout.tsx`.
+- [x] Session sidebar — new chat button, placeholder session list
+- [x] TopBar mode toggle — Chat/Dashboard button switches between modes
+- [x] Remove Chat from dashboard sidebar
+- [ ] Backend: WS channel sessionId support — accept `sessionId` in WebSocket messages, route to `{uuid}.jsonl` instead of always using `main.jsonl`. Channel sessions (Telegram, Discord) keep using `main.jsonl`. WebUI sessions use UUID files.
+- [ ] Frontend: Fix `api.ts` to support request bodies on POST/PATCH/PUT — needed for creating sessions, renaming, etc.
+- [ ] Frontend: Add types for sessions and WS messages to `lib/types.ts` — session list response, session detail, WS send/receive message shapes
+- [ ] Frontend: Create `useWebSocket` hook + `WebSocketProvider` context — singleton WS connection at app root, reconnection logic, pages subscribe to specific event types (chat: token/message_out, logs: log events)
 - [ ] Agent selector — switch between Atlas, Einstein, Wizard, etc.
-- [ ] Session list — browse all sessions per agent/user with last-active timestamps
-- [ ] Session history viewer — read full conversation transcript for any session
+- [ ] Session list — fetch from `GET /api/sessions`, show channel main sessions + WebUI UUID sessions grouped by agent
+- [ ] Chat interface — send messages via WS with `sessionId`, stream responses token-by-token, abort runs mid-stream
+- [ ] Session header — small left-aligned session title, clickable dropdown with Rename, Delete, Reset, Force compaction
+- [ ] Session history viewer — load conversation transcript from `GET /api/sessions/:id`
+- [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
 - [ ] Session actions — reset session, force compaction, view archive list
 
-**Agents**
+Agent Pause now and let user review progress so far...
+
+**Step 4 — Agents**
 - [ ] Agent list — all configured agents with name, model, status
 - [ ] Soul file editor — view and edit `~/.openwren/agents/{id}/soul.md` directly in the UI
 - [ ] Per-agent model override — change model/fallback without editing config file
@@ -238,40 +272,74 @@ A local browser dashboard at `http://127.0.0.1:3000`. Opened via `openwren dashb
   - Filter by `tools: true` (OpenWren requires tool calling), group by provider family, show pricing per million tokens
 - [ ] Agent creation — add a new agent (creates soul.md stub, adds to config)
 
-**Memory**
-- [ ] Memory file browser — list all files in `~/.openwren/memory/`
-- [ ] Memory editor — view and edit individual memory files (markdown)
-- [ ] Memory delete — remove stale memory keys
+Agent Pause now and let user review progress so far...
 
-**Config**
+**Step 5 — Teams**
+- [ ] Team list — show all teams with manager and member agents
+- [ ] Team editor — create/edit teams: set manager (dropdown filtered to role:manager agents), select members (checkbox list)
+- [ ] Team deletion with confirmation
+- [ ] Validation: manager must have role:manager, members can't include the manager, team ID must be unique
+
+Agent Pause now and let user review progress so far...
+
+**Step 6 — Config**
 - [ ] Config editor — view and edit `~/.openwren/openwren.json` via form or raw JSON5
 - [ ] Config validation — show errors before saving, protect against concurrent edits
 - [ ] Restart prompt — notify when a config change requires restart to take effect
 
-**Channels & Status**
-- [ ] Channel status panel — show which channels are connected (Telegram, Discord) and their bot usernames
-- [ ] Per-channel connection health — last message received, error state if login failed
+Agent Pause now and let user review progress so far...
 
-**Skills**
-- [ ] Skills panel — list all loaded skills, which are active vs gated out, enable/disable toggle
-
-**Usage & Monitoring**
-- [ ] Usage dashboard — reads `summary.json` for instant totals, daily JSONL for drill-down (Phase 9.6)
-- [ ] Live token display — status bar below chat input showing session total + last turn usage (from `LoopResult.usage` via WebSocket, no file reads)
-- [ ] Token counts and estimated cost per session/agent/day
-- [ ] Live log tail — stream `~/.openwren/openwren.log` with text filter
-- [ ] System health — uptime, active agents, memory file count, session count
-
-**Execution Approvals**
-- [ ] Approval panel — view pending shell command confirmations and approve/reject from browser
-- [ ] Allowlist editor — view and edit `exec-approvals.json` (permanently approved commands per agent)
-
-**Scheduled Tasks (uses Phase 9.1 REST API)**
+**Step 7 — Schedules (uses Phase 9.1 REST API)**
 - [ ] Cron job list — view all scheduled tasks, last run time, next run time (GET /api/schedules)
 - [ ] Enable/disable/run-now controls per job (POST /api/schedules/:id/enable|disable|run)
 - [ ] Create/edit/delete scheduled jobs via form UI
 - [ ] Run history viewer per job
 - [ ] Heartbeat checklist editor (edit heartbeat.md per agent)
+
+Agent Pause now and let user review progress so far...
+
+**Step 8 — Usage**
+- [ ] Period selector — Today, 7d, 30d, All (sums from summary.json days, no extra API call)
+- [ ] Summary cards — total input, output, cached tokens, estimated cost
+- [ ] Daily breakdown — horizontal bar chart (cached vs uncached), from summary.json.days
+- [ ] By Agent / By Provider / By Source — sorted lists with token counts and percentages
+- [ ] Drill-down table — click any bar/row to see per-request entries (GET /api/usage/detail)
+- [ ] Cost estimation — per-model pricing (from @llmgateway/models or config map)
+- [ ] Auto-refresh every 60 seconds
+
+Agent Pause now and let user review progress so far...
+
+**Step 9 — Memory**
+- [ ] Memory file browser — list all files in `~/.openwren/memory/`
+- [ ] Memory editor — view and edit individual memory files (markdown)
+- [ ] Memory delete — remove stale memory keys
+
+Agent Pause now and let user review progress so far...
+
+**Step 10 — Skills**
+- [ ] Skills panel — list all loaded skills, which are active vs gated out, enable/disable toggle
+
+Agent Pause now and let user review progress so far...
+
+**Step 11 — Workflows**
+- [ ] Workflow list — active and completed workflows with status badge, manager, started date
+- [ ] Status filter — All, Running, Completed, Failed
+- [ ] Workflow detail — task tree view showing parent-child hierarchy, status per task, duration, assigned agent
+- [ ] Task detail — click a task node to see full info: agent, assigned by, status, duration, result summary, deliverables, error
+- [ ] Real-time updates — active workflow task statuses update via WebSocket events (task_completed, task_failed)
+
+Agent Pause now and let user review progress so far...
+
+**Step 12 — Logs**
+- [ ] Live log tail — stream `~/.openwren/openwren.log` with text filter
+
+Agent Pause now and let user review progress so far...
+
+**Step 13 — Approvals**
+- [ ] Approval panel — view pending shell command confirmations and approve/reject from browser
+- [ ] Allowlist editor — view and edit `exec-approvals.json` (permanently approved commands per agent)
+
+Agent Pause now and let user review progress so far...
 
 ### Phase 11 — WhatsApp (Optional, Proceed with Caution)
 

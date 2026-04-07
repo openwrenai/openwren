@@ -891,6 +891,25 @@ function fmtTokens(n: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard command
+// ---------------------------------------------------------------------------
+
+function cmdDashboard(): void {
+  const port = process.env.PORT ?? "3000";
+  const token = readWsToken();
+  const base = `http://127.0.0.1:${port}`;
+  const url = token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  if (!token) {
+    console.log("Warning: WS_TOKEN not set — dashboard will not be able to authenticate.");
+  }
+  console.log(`Opening dashboard at ${base}`);
+  import("child_process").then(({ exec }) => {
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    exec(`${cmd} "${url}"`);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Help text
 // ---------------------------------------------------------------------------
 
@@ -910,6 +929,7 @@ Commands:
   chat [agent]      Interactive terminal chat (default: atlas)
   schedule [cmd]    Manage scheduled jobs (list, create, enable, disable, delete, run, history)
   usage [options]   Show token usage summary (--days N, --agent X, --provider X)
+  dashboard         Open the web dashboard in your default browser
 `);
 }
 
@@ -929,8 +949,9 @@ async function main(): Promise<void> {
     case "logs":    cmdLogs();              break;
     case "chat":     await cmdChat(args[0]);   break;
     case "schedule": await cmdSchedule(args); break;
-    case "usage":    await cmdUsage(args);    break;
-    default:         printUsage();            break;
+    case "usage":      await cmdUsage(args);    break;
+    case "dashboard":  cmdDashboard();          break;
+    default:           printUsage();            break;
   }
 }
 
