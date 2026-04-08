@@ -25,182 +25,13 @@ Add web research tools: search, fetch, and browser. Search uses a provider abstr
 ### Phase 9.2 — Shell Security & Confirmation System
 ### Phase 9.3 — Agent Orchestration: Teams, Delegations & Multi-Level Hierarchy
 ### Phase 9.4 — Session Refactor
+### Phase 9.5 — AI SDK Provider Integration
+### Phase 9.6 — Token Tracking
+### Phase 9.7 — Prompt Caching (Anthropic)
 
 ---
 ## Left to do Phases
 ---
-
-### Phase 9.5 — AI SDK Provider Integration
-
-The project currently has two LLM providers — Anthropic (native) and Ollama (translates to/from OpenAI-compatible format). Adding more providers (Google Gemini, OpenAI, Mistral, etc.) means writing a new translation layer each time. The Vercel AI SDK (`ai` package v6) provides a universal interface across 25+ providers. We integrate it as another provider behind our existing `LLMProvider` interface — same pattern as Ollama. No changes to session format, agent loop, or architecture.
-
-The AI SDK becomes a translation-layer provider: our Anthropic-shaped messages go in, get translated to AI SDK's `ModelMessage` format, call `generateText()`, and the response gets translated back to our `LLMResponse`. Existing session JSONL files, the agent loop, tools, channels — nothing changes.
-
-**Step 1: Install dependencies**
-- [x] `npm install ai @ai-sdk/anthropic @ai-sdk/openai @ai-sdk/google @ai-sdk/mistral @ai-sdk/groq @ai-sdk/xai @ai-sdk/deepseek`
-- [x] `@ai-sdk/openai` covers Ollama too (OpenAI-compatible base URL)
-
-**Step 2: Create `src/providers/ai-sdk.ts`**
-- [x] New class `AiSdkProvider implements LLMProvider`
-- [x] Constructor takes `provider` string, `model` string, and `creds` object (API key, base URL — resolved from config by the factory, not read from process.env)
-- [x] Model resolution: map provider name → AI SDK provider factory, passing credentials explicitly:
-  - `"anthropic"` → `createAnthropic({ apiKey })`
-  - `"openai"` → `createOpenAI({ apiKey })`
-  - `"google"` → `createGoogle({ apiKey })`
-  - `"mistral"` → `createMistral({ apiKey })`
-  - `"groq"` → `createGroq({ apiKey })`
-  - `"xai"` → `createXai({ apiKey })`
-  - `"deepseek"` → `createDeepSeek({ apiKey })`
-  - `"ollama"` → `createOpenAI({ baseURL: ollamaBaseUrl + "/v1", apiKey: "ollama" })` — Ollama exposes an OpenAI-compatible endpoint at `/v1`, dummy API key required by the SDK
-- [x] `translateMessages()` — convert our `Message[]` to AI SDK `CoreMessage[]`. Field mapping:
-  - Our `{ role: "assistant", content: [{ type: "tool_use", id, name, input }] }` → AI SDK `{ role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: name, args: input }] }`
-  - Our `{ role: "user", content: [{ type: "tool_result", tool_use_id, content }] }` → AI SDK `{ role: "tool", content: [{ type: "tool-result", toolCallId: tool_use_id, result: content }] }`
-  - Our `{ role: "user"|"assistant", content: "text" }` → AI SDK `{ role: "user"|"assistant", content: "text" }` (pass through)
-  - Our `{ role: "user"|"assistant", content: [{ type: "text", text }] }` → AI SDK `{ role: "user"|"assistant", content: [{ type: "text", text }] }` (pass through)
-  - Reference: `ollama.ts` `translateMessages()` for the same pattern with a different target format
-- [x] `translateTools()` — convert our `ToolDefinition[]` to AI SDK format using `jsonSchema()` helper (no Zod needed)
-- [x] `translateResponse()` — convert AI SDK result back to our `LLMResponse`: check `result.toolCalls.length > 0` → `{ type: "tool_use", toolCalls }`, else `{ type: "text", text: result.text }`. Also extract `result.usage` → `{ inputTokens, outputTokens }` onto the response (free from AI SDK — avoids touching LLMResponse again in Phase 9.6)
-- [x] Error handling: wrap in try/catch, return `{ type: "error", error }` (never throw)
-- [x] `chat()` — uses `generateText()` (non-streaming). Returns full `LLMResponse` as today.
-- [x] `chatStream()` — uses `streamText()`, returns `AsyncIterable<string>` (text deltas). Only called by interactive channels and Phase 10 WebUI — the agent loop keeps using `chat()`.
-
-**Step 3: Add provider config + generalize validation**
-- [x] Add `openai: { apiKey }`, `google: { apiKey }`, `mistral: { apiKey }`, `groq: { apiKey }`, `xai: { apiKey }`, `deepseek: { apiKey }` to `providers` in config type
-- [x] Add defaults (empty API keys for all)
-- [x] Generalize API key validation — replace the current Anthropic-only check (`config.ts:538-545`) with a loop: collect all provider names referenced in `defaultModel`, `defaultFallback`, and every `agents.*.model` / `agents.*.fallback` chain. For each provider that isn't `"ollama"` (no key needed), verify `providers[name].apiKey` is set. This replaces the hardcoded `usesAnthropic` check.
-- [x] API keys passed explicitly via `create*({ apiKey })` factories — the SDK never reads `process.env` directly. Keys flow through the existing `~/.openwren/.env` → `${env:VAR}` → config pipeline.
-- [x] Update `src/templates/openwren.json` — add commented-out lines for new provider credentials
-- [x] Update `src/templates/env.template` — add commented-out env var placeholders for each new provider key
-
-**Step 4: Wire into provider factory**
-- [x] Route ALL providers through AI SDK — replace the switch in `createProviderFromSpec()` with: resolve credentials from `config.providers[spec.provider]`, then `return new AiSdkProvider(spec.provider, spec.model, creds)`. All 7 providers + Ollama go through the same path.
-- [x] Add `chatStream?()` to `LLMProvider` interface as optional method — only `AiSdkProvider` implements it. Callers check `if ('chatStream' in provider)` before using.
-- [x] Add `usage?: { inputTokens: number; outputTokens: number }` to `LLMResponse` — populated by `AiSdkProvider.translateResponse()` from AI SDK's `result.usage`. Phase 9.6 Step 1 becomes zero work.
-- [x] Native `anthropic.ts` and `ollama.ts` files stay in the codebase (not deleted, just unused) — can be removed later when confident
-- [x] ProviderChain, fallback logic, agent config — all work unchanged
-
-**Step 5: Adopt AI SDK session format**
-
-Switch internal message types from Anthropic's format to AI SDK's format. Eliminates the translation layer in `ai-sdk.ts` — messages flow directly from session to `generateText()`. Delete existing session files (project is in beta, no backwards compatibility needed).
-
-- [x] Update `MessageContent` type in `src/providers/index.ts` — replaced flat interface with three discriminated union types (`TextContent`, `ToolCallContent`, `ToolResultContent`) matching AI SDK's `TextPart`, `ToolCallPart`, `ToolResultPart` exactly
-- [x] Update `Message` role — added `role: "tool"` for tool results (AI SDK uses `role: "tool"` instead of stuffing results into `role: "user"`)
-- [x] Update `src/agent/loop.ts` — tool call and tool result block construction uses new field names and `output: { type: "text", value }` structure
-- [x] Update `src/agent/history.ts` — `estimateTokensContent()` uses discriminated type checks (`block.type === "text"` etc.) to access the correct fields
-- [x] Delete `translateMessages()` from `src/providers/ai-sdk.ts` — messages now pass directly as `ModelMessage[]`
-- [x] Delete all existing session files (`~/.openwren/sessions/`)
-- [x] `npx tsc --noEmit` + `npm run build` pass
-- [x] Verify: send a message, confirm tool calls work end-to-end with new format — tested chat + tool calls (save_memory, memory_search) via Telegram, and a full multi-agent workflow with delegation, blocking deps, and auto-completion
-
-**What changed and why:** The old `MessageContent` was a single flat interface with optional fields for all three block types (`text`, `tool_use`, `tool_result`) using Anthropic's naming (`id`, `name`, `input`, `tool_use_id`, `content`). This required a ~70-line `translateMessages()` function in `ai-sdk.ts` to convert between our format and the AI SDK's format on every LLM call.
-
-The new format uses three discriminated union types (`TextContent`, `ToolCallContent`, `ToolResultContent`) that mirror the AI SDK's `TextPart`, `ToolCallPart`, `ToolResultPart` exactly — same field names, same structure. Tool results use `output: { type: "text", value: string }` (not a plain string) and live in `role: "tool"` messages (not `role: "user"`). This means messages pass directly from session JSONL → `generateText()` with a `as ModelMessage[]` cast and no runtime translation. The `translateMessages()` function was deleted entirely.
-
-The `MessageContent` type went from a loose bag of optional fields to properly typed discriminated unions, which gives TypeScript narrowing on `block.type` checks — no more `!` assertions on fields that might not exist.
-
-**Step 6: Add LLM Gateway support**
-
-llmgateway.io is a unified LLM gateway — one API key, 25+ providers. It has a native AI SDK provider package (`@llmgateway/ai-sdk-provider`) that exports `createLLMGateway()`. Model IDs are raw names (`claude-sonnet-4-6`, `gpt-5.4-mini`) — the gateway resolves the actual provider internally.
-
-Implementation notes:
-- `createProviderFromSpec()` in `src/providers/index.ts` is a 2-liner that passes `config.providers[spec.provider]` to `AiSdkProvider` — no changes needed there, llmgateway flows through automatically as long as config has `llmgateway: { apiKey }`
-- The change goes in `resolveModel()` inside `src/providers/ai-sdk.ts` — add `case "llmgateway"` to the switch, import `createLLMGateway` from `@llmgateway/ai-sdk-provider`, call `createLLMGateway({ apiKey: this.creds.apiKey })(this.model)`
-- No baseURL handling needed (unlike ollama) — the package handles routing internally
-
-- [x] `npm install @llmgateway/ai-sdk-provider`
-- [x] Add `import { createLLMGateway } from "@llmgateway/ai-sdk-provider"` to `src/providers/ai-sdk.ts`
-- [x] Add `case "llmgateway": return createLLMGateway({ apiKey: this.creds.apiKey })(this.model)` to `resolveModel()` switch in `src/providers/ai-sdk.ts`
-- [x] Add `llmgateway: { apiKey: string }` to `providers` in config type (`src/config.ts`) + add default (empty apiKey)
-- [x] Validation already works — the generalized API key check loops all providers in the chain and verifies `providers[name].apiKey` is set. No new validation code needed, just ensure `llmgateway` is in the config type.
-- [x] Update `src/templates/openwren.json` — add `// "providers.llmgateway.apiKey": "${env:LLM_GATEWAY_API_KEY}",`
-- [x] Update `src/templates/env.template` — add `# LLM_GATEWAY_API_KEY=llmgtwy_...`
-- [x] Test: `"defaultModel": "llmgateway/claude-haiku-4-5"` — verified chat + tool use (save_memory) works through the gateway
-- [x] Test: `"defaultModel": "llmgateway/gpt-5.4-mini"` — verified chat + tool use (save_memory) through OpenAI via gateway
-- [ ] Test: `"defaultModel": "llmgateway/gemini-2.5-flash"` — verify Google Gemini through the gateway
-- [x] Test: `"defaultModel": "llmgateway/deepseek-v3.1"` — verified chat + tool use (save_memory) through DeepSeek via gateway
-- [ ] Test: `"defaultModel": "llmgateway/mistral-large-latest"` — verify Mistral through the gateway
-
-**Step 7: Test**
-- [x] Config: `"defaultModel": "anthropic/claude-sonnet-4-6"` — verify Anthropic works through AI SDK (same config, different plumbing)
-- [ ] Config: `"defaultModel": "google/gemini-2.5-flash"` or `"openai/gpt-5.4-mini"` — verify chat works via AI SDK
-- [ ] Config: `"defaultModel": "ollama/llama3.2"` — verify Ollama works through AI SDK
-- [ ] Test tool use: ask agent to read a file — verify tool call/result round-trip
-- [ ] Test fallback: mixed chain (e.g., `"google/gemini-2.5-flash, anthropic/claude-haiku-4-5"`) — both go through AI SDK
-- [ ] Test streaming: interactive channel gets streamed response
-
-**Design decisions:**
-- All providers route through AI SDK — one translation layer, one code path. Native provider files kept but unused.
-- No Zod — AI SDK's `jsonSchema()` helper accepts raw JSON Schema, which we already use
-- Streaming via `chatStream()` (Option A) — `chat()` stays non-streaming (agent loop), `chatStream()` added as optional method for interactive callers (channels, Phase 10 WebUI)
-- Token usage added to `LLMResponse` now — AI SDK returns it for free, saves touching the interface again in Phase 9.6
-- No `maxTokens` config — omit it from `generateText()` calls and let each provider/model use its own default
-- LLM Gateway is just another AI SDK provider — uses `@llmgateway/ai-sdk-provider` package, no special gateway/routing abstraction needed
-
-**What does NOT change:** Session JSONL format, agent loop, `Message` / `MessageContent` / `ToolDefinition` / `ToolCall` types, channels, scheduler, orchestrator, skills, CLI, gateway.
-
----
-
-### Phase 9.6 — Token Tracking
-
-Track real token usage across everything — chat, workflows, jobs, notifications. File-based approach: daily JSONL logs as source of truth + accumulated summary for instant dashboard reads. No database — keeps the architecture simple.
-
-**IMPORTANT: Read `docs/Tokens.md` before starting.** It contains the full design — file formats, summary structure, resilience strategy, recording point, and implementation notes. Everything you need is there.
-
-**Step 1: Provider interface** — ALREADY DONE (Phase 9.5)
-- [x] `usage: { inputTokens, outputTokens }` already on `LLMResponse` (Phase 9.5 Step 4)
-- [x] `AiSdkProvider.translateResponse()` already populates usage from AI SDK's `result.usage`
-- [x] AI SDK normalizes token counts across all providers — no per-provider extraction logic needed
-
-**Step 2: Usage file layer**
-
-Create `src/usage/` module with two files:
-- Daily JSONL log: `~/.openwren/usage/YYYY-MM-DD.jsonl` — append-only, one line per loop run
-- Accumulated summary: `~/.openwren/usage/summary.json` — running totals, updated atomically per run
-
-- [x] Create `src/usage/index.ts`:
-  - `recordUsage(entry)` — appends line to today's daily file + updates summary.json
-  - `loadSummary()` — reads summary.json (for dashboards, CLI)
-  - `rebuildSummary()` — scans all daily files and regenerates summary.json (resilience — called on startup if summary is missing/corrupt)
-- [x] Daily log line format: `{ ts, agent, provider, model, in, out, source, sourceId, workflowId, userId, sessionId }`
-- [x] Summary format: `{ days: { "YYYY-MM-DD": { in, out } }, byAgent: { ... }, byProvider: { ... }, bySession: { ... } }`
-- [x] Atomic summary writes — read → update counters → write whole file
-- [x] Ensure `~/.openwren/usage/` directory is created if missing
-- [ ] Optional: configurable retention — prune daily files older than N days, drop stale entries from summary
-
-**Step 3: Recording in agent loop**
-- [x] Accumulate token counts across all ReAct iterations in `runAgentLoop()` — sum `response.usage.inputTokens` / `response.usage.outputTokens` from each LLM call
-- [x] Extract provider and model from `provider.name` (format `"provider/model"` — split on `/`)
-- [x] Call `recordUsage()` when the loop finishes
-- [x] Pass source context: `{ source, sourceId, workflowId, userId, sessionId }` via `RunLoopOptions`
-- [x] Add `usage?: { inputTokens: number; outputTokens: number }` to `LoopResult` — so channels/WebUI can display per-turn token counts in real-time without reading files
-
-**Step 4: Wire up callers**
-- [x] Channel adapters — set `source: "chat"`, `userId`, `sessionId`
-- [x] Orchestrator runner — set `source: "task"`, `sourceId: task.slug`, `workflowId`
-- [x] Scheduler runner — set `source: "job"`, `sourceId: jobId`
-- [x] Notify — set `source: "notify"`, `workflowId`
-- [x] Update scheduler runner to use real token counts from `LoopResult.usage` instead of `Math.ceil(rawText.length / 4)` estimate
-
-**Step 5: Query API**
-- [x] `GET /api/usage` — reads summary.json, returns totals with optional filters (date range, agent, model, provider, source)
-- [x] `GET /api/usage/detail?date=2026-03-31` — reads daily JSONL file, returns per-run entries for drill-down
-- [x] Wire into `src/gateway/routes/`
-
-**Step 6: CLI**
-- [x] `openwren usage` — show today's token usage summary (reads summary.json)
-- [x] `openwren usage --agent atlas --days 7` — per-agent breakdown from summary
-
----
-
-### Phase 9.7 — Prompt Caching (Anthropic)
-
-Optimize token costs by enabling Anthropic's prompt caching. System prompt + tool definitions + conversation history are largely static between ReAct iterations — caching them reduces input token costs to 0.1x on cache hits (vs 1.25x on cache writes). Anthropic-specific — other providers unaffected.
-
-- [ ] Add `cache_control: { type: "ephemeral" }` via AI SDK's `providerOptions.anthropic.cacheControl` on `generateText()` / `streamText()` calls
-- [ ] Only apply when provider is `"anthropic"` — other providers ignore it
-- [ ] Verify cache hits in Anthropic dashboard / response headers
-- [ ] Consider marking system prompt + tool definitions as cacheable (stable across iterations) vs conversation tail (changes each turn)
-- [ ] Minimum cacheable size: 1,024 tokens (Sonnet), 4,096 tokens (Haiku 4.5 / Opus) — skip caching for very short prompts
 
 ---
 
@@ -254,13 +85,33 @@ Implementation:
 - [x] Frontend: Create `useWebSocket` hook + `WebSocketProvider` context — singleton WS connection at app root, reconnection logic, pages subscribe to specific event types (chat: token/message_out, logs: log events)
 - [x] Agent selector — switch between Atlas, Einstein, Wizard, etc.
 - [x] Session list — fetch from `GET /api/sessions`, show WebUI UUID sessions filtered by active agent
-- [x] Chat interface — send messages via WS with `sessionId`, stream responses token-by-token, thinking indicator
+- [x] Chat interface — send messages via WS with `sessionId`, thinking indicator, message display
 - [x] Session header — session title and agent name shown at top of chat area
-- [ ] Lazy session creation — "New Chat" shows a blank centered chat (like Claude.ai) without creating a file. Session is only created after first message is sent and agent replies. Agent auto-names the session.
-- [ ] Two-state chat input — **Fresh chat:** textarea centered vertically+horizontally on screen, auto-focused, agent picker inside the input area (bottom-right, like Claude.ai's model picker). **Active chat:** textarea pinned to bottom of screen, agent picker hidden (agent locked for session), messages above.
-- [ ] Auto-growing textarea — textarea expands upward as user adds lines with Shift+Enter. Works in both centered (fresh) and bottom-pinned (active) states. In active state, growing textarea shrinks the message area above it. No fixed height limit.
-- [ ] Session history loading — load conversation transcript from session JSONL when selecting an existing session
-- [ ] Clean up ghost sessions — delete empty session files created by the eager "New Chat" approach
+
+Streaming (token-by-token):
+- [x] Backend: Add `streamCallback?: (delta: string) => void` option to `runAgentLoop`. When provided and the provider supports `chatStream()`, use streaming instead of `chat()` and call the callback with each text delta. Graceful fallback: if streaming fails (e.g. provider doesn't support `stream:true` with tools), catches the error and falls through to the non-streaming `chat()` path.
+- [x] Backend: Add `StreamPart` discriminated union type to `LLMProvider` interface — `text | tool-call | finish`. `chatStream()` changed from `AsyncIterable<string>` to `AsyncIterable<StreamPart>`. Uses AI SDK's `fullStream` to yield both text deltas and tool calls from a single LLM call.
+- [x] Backend: In `websocket.ts`, pass `streamCallback` that sends `token` events directly to the requesting WS client via `sendTo()` (not broadcast). Each delta becomes `{ type: "token", payload: { text, sessionId } }`.
+- [x] Backend: Add `onToolUse` and `onToolResult` callbacks to `RunLoopOptions`. Tool call iterations stay non-streaming. Emit `tool_use` event when a tool call starts (tool name, args) and `tool_result` when done. These fire in both streaming and non-streaming paths.
+- [x] Backend: Add `TokenEvent`, `ToolUseEvent`, `ToolResultEvent` to the event bus type map for type safety (though they are sent via direct `sendTo()`, not `bus.emit()`).
+- [x] Frontend: Handle `token`, `tool_use`, and `tool_result` WS events. Token streaming builds text incrementally via `streamingRef` (mutable ref to avoid React StrictMode double-invocation bug). Tool calls render as collapsible `ToolCallCard` components with spinner → checkmark transition.
+- [x] Frontend: `ChatItem` union type (`TextItem | ToolCallItem`) replaces flat `ChatMessage`. Items rendered in order creating interleaved flow: text → tool card → text. Streaming text flushed to a message item when a tool call arrives mid-stream.
+- [x] Bug fix: React StrictMode double-invoked state updaters that had `setItems()` nested inside `setStreamingText()`, causing duplicate messages. Fixed by using `streamingRef` (mutable ref) for synchronous reads and `setStreamingText` (state) only for re-renders.
+- [x] Bug fix: AI SDK `fullStream` emits errors as stream parts (`type: "error"`), not thrown exceptions. Added re-throw in `ai-sdk.ts` so the agent loop's try/catch can handle it and fall back to `chat()`.
+- [x] Session isolation: Added `sessionId` to `MessageOutEvent`, `AgentTypingEvent`, `AgentErrorEvent`, `MessageInEvent` in the event bus. WebSocket channel includes `sessionId` in all bus emits and direct `sendTo()` calls. Frontend filters all events by `sessionId` — Telegram/Discord responses (no sessionId) are silently ignored, preventing cross-channel leaks into the WebUI chat.
+
+UX improvements:
+- [x] Lazy session creation — "New Chat" navigates to `/chat` (no session file created). Session created via `POST /api/sessions` on first message send. URL updated with `window.history.replaceState()` to avoid route remount (which would destroy component state and WS subscription mid-stream).
+- [x] Two-state chat input — **Fresh chat:** textarea centered vertically+horizontally on screen, auto-focused, "How can I help?" heading, send button inside textarea (bottom-right). **Active chat:** textarea pinned to bottom of screen, messages above, session header at top. Transition happens when first message is sent.
+- [x] Auto-growing textarea — `useAutoResize` hook adjusts height to fit content on every input change. Fresh chat starts at `rows={3}`. Resets to base height when input is cleared after sending.
+Session history loading (paginated):
+- [ ] Backend: `GET /api/sessions/:id/messages?limit=50` — reads session JSONL from the end, returns the last N messages transformed into ChatItem-compatible shape (TextItem for user/assistant text, ToolCallItem for tool-call/tool-result pairs). Includes total message count in response for pagination awareness.
+- [ ] Backend: `GET /api/sessions/:id/messages?limit=50&before=<timestamp>` — returns N messages older than the given timestamp. Used for scroll-up pagination to load earlier history.
+- [ ] Backend: Transform JSONL `Message` objects (AI SDK format with role user/assistant/tool, content arrays with text/tool-call/tool-result blocks) into flat ChatItem array the frontend can render directly.
+- [ ] Frontend: On session select, fetch last 50 messages and populate `items` state. Show messages immediately (no streaming — these are historical).
+- [ ] Frontend: Scroll-up pagination — when user scrolls to the top of the message area, fetch the next 50 older messages and prepend to `items`. Maintain scroll position so the view doesn't jump.
+- [ ] Frontend: Show a "Load more" indicator or spinner at the top while fetching older messages. Hide when no more messages available (total count reached).
+- [ ] Ghost session cleanup — checked off, no code needed. Lazy session creation prevents new ghosts. Existing empty files manually deleted.
 - [ ] Session header dropdown — clickable with Rename, Delete, Reset, Force compaction actions
 - [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
 - [ ] Session actions — reset session, force compaction, view archive list

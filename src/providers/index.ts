@@ -84,18 +84,45 @@ export interface LLMResponse {
  * Common interface for LLM backends. Each provider (Anthropic, Ollama, etc.)
  * implements this so the agent loop doesn't know or care which backend it's talking to.
  */
+
+/**
+ * A single part yielded by chatStream() during a streaming LLM call.
+ * Uses AI SDK's fullStream under the hood, which yields both text and tool calls
+ * from a single request (no need for separate streaming and non-streaming calls).
+ *
+ * - "text"      — a text delta (one or more tokens). Forwarded to the WS client in real-time.
+ * - "tool-call" — a complete tool call with name + args. The agent loop executes the tool
+ *                 and loops again so the LLM can see the result.
+ * - "finish"    — stream ended. Carries accumulated usage stats (inputTokens, outputTokens)
+ *                 across all steps in the stream.
+ */
+export type StreamPart =
+  | { type: "text"; text: string }
+  | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> }
+  | { type: "finish"; usage: { inputTokens: number; outputTokens: number } };
+
 export interface LLMProvider {
   name: string;
+  /** Non-streaming LLM call. Used by the agent loop for all channels. */
   chat(
     systemPrompt: string,
     messages: Message[],
     tools: ToolDefinition[]
   ): Promise<LLMResponse>;
+  /**
+   * Streaming LLM call. Optional — only AiSdkProvider implements it.
+   * When absent, the agent loop falls back to non-streaming chat().
+   *
+   * Used by the WebUI WebSocket channel for token-by-token streaming.
+   * Yields StreamPart events: text deltas, tool calls, and a final finish
+   * event with usage stats. The agent loop consumes these to forward text
+   * deltas to the client and handle tool calls in the ReAct loop.
+   */
   chatStream?(
     systemPrompt: string,
     messages: Message[],
     tools: ToolDefinition[]
-  ): AsyncIterable<string>;
+  ): AsyncIterable<StreamPart>;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +273,27 @@ class ProviderChain implements LLMProvider {
     }
 
     return lastError;
+  }
+
+  /**
+   * Streaming via the primary provider only — no fallback chain.
+   *
+   * Unlike chat() which tries each provider in sequence on failure,
+   * chatStream() only uses specs[0]. If streaming fails (e.g. the provider
+   * doesn't support stream:true with tools), the agent loop catches the
+   * error and falls back to the non-streaming chat() path, which DOES
+   * have fallback chain support.
+   */
+  async *chatStream(
+    systemPrompt: string,
+    messages: Message[],
+    tools: ToolDefinition[]
+  ): AsyncIterable<StreamPart> {
+    const provider = createProviderFromSpec(this.specs[0]);
+    if (!provider.chatStream) {
+      throw new Error(`Provider ${this.specs[0].provider} does not support streaming`);
+    }
+    yield* provider.chatStream(systemPrompt, messages, tools);
   }
 }
 

@@ -1,98 +1,344 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "@tanstack/react-router";
-import { Send, MessageSquare, Loader2 } from "lucide-react";
+import { Send, MessageSquare, Loader2, Wrench, ChevronDown, ChevronRight, Check } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket.ts";
 import { api } from "@/lib/api.ts";
-import { cn } from "@/lib/utils.ts";
+import { cn, stripTimestamps } from "@/lib/utils.ts";
 import type { SessionEntry, WsServerEvent } from "@/lib/types.ts";
 
-interface ChatMessage {
+// ---------------------------------------------------------------------------
+// Chat item types — messages + tool calls rendered in order
+// ---------------------------------------------------------------------------
+
+interface TextItem {
+  kind: "text";
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
 }
 
+interface ToolCallItem {
+  kind: "tool_call";
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  result?: string;
+  timestamp: number;
+}
+
+type ChatItem = TextItem | ToolCallItem;
+
+// ---------------------------------------------------------------------------
+// ToolCallCard — collapsible inline card for tool calls
+// ---------------------------------------------------------------------------
+
+function ToolCallCard({ item }: { item: ToolCallItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const isDone = item.result !== undefined;
+
+  // Summarize args for collapsed view
+  const summary = Object.entries(item.args)
+    .map(([k, v]) => {
+      const val = typeof v === "string" ? v : JSON.stringify(v);
+      return `${k}: ${val.length > 40 ? val.slice(0, 40) + "…" : val}`;
+    })
+    .join(", ");
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[70%] rounded-lg border border-border/50 text-xs font-mono">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-muted/30 transition-colors rounded-lg"
+        >
+          {isDone ? (
+            <Check className="h-3 w-3 text-emerald-500 shrink-0" />
+          ) : (
+            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
+          )}
+          <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
+          <span className="text-muted-foreground">{item.toolName}</span>
+          {!expanded && summary && (
+            <span className="text-muted-foreground/50 truncate">— {summary}</span>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-3 w-3 text-muted-foreground/50 ml-auto shrink-0" />
+          ) : (
+            <ChevronRight className="h-3 w-3 text-muted-foreground/50 ml-auto shrink-0" />
+          )}
+        </button>
+        {expanded && (
+          <div className="px-3 pb-2 space-y-2 border-t border-border/30">
+            <div className="pt-2">
+              <div className="text-muted-foreground/60 mb-1">Input:</div>
+              <pre className="text-muted-foreground whitespace-pre-wrap break-all">
+                {JSON.stringify(item.args, null, 2)}
+              </pre>
+            </div>
+            {isDone && (
+              <div>
+                <div className="text-muted-foreground/60 mb-1">Result:</div>
+                <pre className="text-muted-foreground whitespace-pre-wrap break-all">
+                  {item.result}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Auto-growing textarea hook
+//
+// Adjusts textarea height to fit content. Resets to single row when value
+// is cleared (after sending a message). Works in both centered (fresh) and
+// bottom-pinned (active) states.
+// ---------------------------------------------------------------------------
+
+function useAutoResize(ref: React.RefObject<HTMLTextAreaElement | null>, value: string) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [ref, value]);
+}
+
+// ---------------------------------------------------------------------------
+// Chat page — two-state layout
+//
+// State 1 (Fresh): no sessionId in URL, no messages. Textarea centered on
+//   screen with agent picker inside. Session created lazily on first send.
+// State 2 (Active): sessionId in URL, messages exist. Textarea pinned to
+//   bottom, messages scroll above, session header at top.
+// ---------------------------------------------------------------------------
+
 export function Chat() {
   const params = useParams({ strict: false }) as { sessionId?: string };
-  const sessionId = params.sessionId;
 
   const { connected, send, subscribe } = useWebSocket();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  // streamingRef tracks the accumulated streaming text as a mutable ref.
+  // WHY a ref instead of reading streamingText state:
+  // React StrictMode double-invokes state updater functions to verify they're pure.
+  // The old code nested setItems() inside setStreamingText() updaters, which caused
+  // messages to be added twice. The ref is mutated once per event (not inside an
+  // updater), so StrictMode can't double-invoke it.
+  const streamingRef = useRef("");
+  // activeSessionId tracks the current session. Seeded from URL params, but also
+  // updated synchronously during lazy creation (before navigation). This avoids
+  // the remount problem: /chat and /chat/:sessionId are separate routes, so
+  // navigating between them unmounts/remounts the component and loses all state.
+  // By tracking sessionId as state + ref, we keep items and streaming alive
+  // across the lazy creation flow.
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(params.sessionId);
+  const sessionIdRef = useRef<string | undefined>(params.sessionId);
   const [session, setSession] = useState<SessionEntry | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load session info
+  // Sync activeSessionId when URL params change (e.g. clicking a session in sidebar)
   useEffect(() => {
-    if (!sessionId) {
+    if (params.sessionId && params.sessionId !== activeSessionId) {
+      setActiveSessionId(params.sessionId);
+      sessionIdRef.current = params.sessionId;
+      setItems([]);
+    }
+    if (!params.sessionId && activeSessionId) {
+      // Navigated to /chat (New Chat) — reset
+      setActiveSessionId(undefined);
+      sessionIdRef.current = undefined;
+      setItems([]);
       setSession(null);
-      setMessages([]);
+    }
+  }, [params.sessionId]);
+
+  // Auto-grow textarea as user types or adds newlines with Shift+Enter
+  useAutoResize(inputRef, input);
+
+  // The "active" state: we have a session AND at least one message.
+  // Drives the layout transition from centered (fresh) to bottom-pinned (active).
+  const isActive = !!activeSessionId && items.length > 0;
+
+  // Load session metadata when activeSessionId changes
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSession(null);
       return;
     }
 
-    api.get<SessionEntry & { id: string }>(`/api/sessions/${sessionId}`)
+    api.get<SessionEntry & { id: string }>(`/api/sessions/${activeSessionId}`)
       .then((s) => setSession(s))
       .catch(() => setSession(null));
+  }, [activeSessionId]);
 
-    // TODO: load message history from session JSONL
-    setMessages([]);
-  }, [sessionId]);
-
-  // Subscribe to WS events
+  // Subscribe to WS events for the active session.
+  // All event handlers filter by sessionId to prevent cross-session and
+  // cross-channel leaks (e.g. a Telegram response showing up in the WebUI).
+  // Events without a sessionId (from Telegram/Discord) are silently ignored.
   useEffect(() => {
     const unsub = subscribe((event: WsServerEvent) => {
+
+      // --- Session filter helper ---
+      // Uses sessionIdRef (not the sessionId closure) so it works immediately
+      // after lazy session creation, before React re-renders with the new URL.
+      // Events without sessionId (Telegram, Discord) are rejected.
+      const isMySession = (payload: { sessionId?: string }): boolean =>
+        !!sessionIdRef.current && payload.sessionId === sessionIdRef.current;
+
       if (event.type === "agent_typing") {
+        if (!isMySession(event.payload)) return;
         setIsThinking(true);
+        streamingRef.current = "";
         setStreamingText("");
+      }
+
+      if (event.type === "token") {
+        if (!isMySession(event.payload)) return;
+        // First token clears the "Thinking..." indicator
+        setIsThinking(false);
+        // Dual update: ref for synchronous reads in other handlers,
+        // state for React to re-render the streaming bubble
+        streamingRef.current += event.payload.text;
+        setStreamingText(streamingRef.current);
+      }
+
+      if (event.type === "tool_use") {
+        if (!isMySession(event.payload)) return;
+        // Flush: if tokens were streaming and a tool call arrives mid-stream,
+        // finalize the accumulated text as a message item BEFORE adding the
+        // tool card. This creates the interleaved flow:
+        //   streaming text... → [tool card] → streaming text...
+        if (streamingRef.current) {
+          const flushed = streamingRef.current;
+          streamingRef.current = "";
+          setStreamingText("");
+          setItems((prev) => [...prev, {
+            kind: "text",
+            role: "assistant",
+            text: stripTimestamps(flushed),
+            timestamp: Date.now(),
+          }]);
+        }
+
+        setItems((prev) => [...prev, {
+          kind: "tool_call",
+          toolCallId: event.payload.toolCallId,
+          toolName: event.payload.toolName,
+          args: event.payload.args,
+          timestamp: event.payload.timestamp,
+        }]);
+      }
+
+      if (event.type === "tool_result") {
+        if (!isMySession(event.payload)) return;
+        // Find the matching tool card by toolCallId and set its result.
+        // This swaps the spinner for a checkmark in the ToolCallCard.
+        setItems((prev) => prev.map((item) =>
+          item.kind === "tool_call" && item.toolCallId === event.payload.toolCallId
+            ? { ...item, result: event.payload.result }
+            : item
+        ));
       }
 
       if (event.type === "message_out") {
+        if (!isMySession(event.payload)) return;
         setIsThinking(false);
-        const text = streamingText || event.payload.text;
-        setMessages((prev) => [...prev, {
-          role: "assistant",
-          text,
-          timestamp: event.payload.timestamp,
-        }]);
+        // Finalize the response as a single message item.
+        // If streaming happened, streamingRef has the full text (prefer it).
+        // If streaming didn't happen (non-streaming fallback), use the
+        // full response from event.payload.text.
+        // Either way, exactly ONE message is added.
+        const text = stripTimestamps(streamingRef.current || event.payload.text);
+        streamingRef.current = "";
         setStreamingText("");
+        if (text) {
+          setItems((prev) => [...prev, {
+            kind: "text",
+            role: "assistant",
+            text,
+            timestamp: event.payload.timestamp,
+          }]);
+        }
       }
 
       if (event.type === "agent_error") {
+        if (!isMySession(event.payload)) return;
         setIsThinking(false);
+        streamingRef.current = "";
         setStreamingText("");
-        setMessages((prev) => [...prev, {
+        setItems((prev) => [...prev, {
+          kind: "text",
           role: "assistant",
           text: `Error: ${event.payload.error}`,
           timestamp: event.payload.timestamp,
         }]);
       }
-
-      // Token streaming — not yet emitted by backend but ready for when it is
-      if (event.type === "token") {
-        setStreamingText((prev) => prev + event.payload.text);
-      }
     });
 
     return unsub;
-  }, [subscribe, streamingText]);
+  }, [subscribe]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom on new messages or streaming text
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingText]);
+  }, [items, streamingText]);
 
-  const handleSend = useCallback(() => {
+  // -------------------------------------------------------------------------
+  // handleSend — lazy session creation
+  //
+  // Fresh chat (no sessionId): creates session via POST /api/sessions, then
+  // navigates to /chat/:sessionId and sends the message. The session file
+  // is created on disk at this point, but it's empty until the agent responds.
+  //
+  // Active chat (has sessionId): sends the message directly via WS.
+  // -------------------------------------------------------------------------
+  const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || !sessionId || isThinking) return;
+    if (!text || isThinking) return;
 
-    setMessages((prev) => [...prev, { role: "user", text, timestamp: Date.now() }]);
-    send({ type: "message", agentId: session?.agentId ?? "atlas", sessionId, text });
+    // Add user message to the UI immediately (optimistic)
+    setItems((prev) => [...prev, { kind: "text", role: "user", text, timestamp: Date.now() }]);
     setInput("");
+
+    if (!activeSessionId) {
+      // Lazy session creation — create on first message, not on "New Chat"
+      try {
+        const agentId = session?.agentId ?? "atlas";
+        const res = await api.post<{ id: string }>("/api/sessions", {
+          agentId,
+          label: "New Chat",
+        });
+        // Update state + ref SYNCHRONOUSLY so the WS event handler can match
+        // events for this session immediately
+        setActiveSessionId(res.id);
+        sessionIdRef.current = res.id;
+        // Update URL cosmetically WITHOUT triggering a route change.
+        // Using navigate() would unmount this component (different route),
+        // destroying all state and the WS subscription mid-stream.
+        window.history.replaceState(null, "", `/chat/${res.id}`);
+        // Send the message with the newly created sessionId
+        send({ type: "message", agentId, sessionId: res.id, text });
+      } catch (err) {
+        console.error("Failed to create session:", err);
+        setItems((prev) => [...prev, {
+          kind: "text", role: "assistant",
+          text: "Error: Failed to create session. Please try again.",
+          timestamp: Date.now(),
+        }]);
+      }
+    } else {
+      send({ type: "message", agentId: session?.agentId ?? "atlas", sessionId: activeSessionId, text });
+    }
+
     inputRef.current?.focus();
-  }, [input, sessionId, isThinking, send, session]);
+  }, [input, activeSessionId, isThinking, send, session]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -101,17 +347,52 @@ export function Chat() {
     }
   }, [handleSend]);
 
-  // Empty state — no session selected
-  if (!sessionId) {
+  // -------------------------------------------------------------------------
+  // Render — two-state layout
+  // -------------------------------------------------------------------------
+
+  // State 1: Fresh chat — centered input, no messages, no session header
+  if (!isActive) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40 gap-3">
-        <MessageSquare className="h-12 w-12" />
-        <h1 className="text-xl font-semibold text-foreground">Start a conversation</h1>
-        <p>Create a new chat or select a session.</p>
+      <div className="flex flex-col items-center justify-center h-full px-6">
+        <div className="w-full max-w-2xl space-y-4">
+          <div className="text-center space-y-1 mb-6">
+            <h1 className="text-xl font-semibold text-foreground">
+              How can I help?
+            </h1>
+            <p className="text-sm text-muted-foreground/50">Start a conversation</p>
+          </div>
+
+          {!connected && (
+            <div className="text-xs text-destructive text-center">Disconnected — reconnecting...</div>
+          )}
+
+          <div className="relative">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message..."
+              autoFocus
+              disabled={!connected || isThinking}
+              rows={3}
+              className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || !connected || isThinking}
+              className="absolute right-3 bottom-3 p-1.5 rounded-lg bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
+  // State 2: Active chat — session header, messages, bottom-pinned input
   return (
     <div className="flex flex-col h-full">
       {/* Session header */}
@@ -122,41 +403,50 @@ export function Chat() {
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={cn(
-              "flex",
-              msg.role === "user" ? "justify-end" : "justify-start",
-            )}
-          >
+      {/* Messages + tool calls */}
+      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+        {items.map((item, i) =>
+          item.kind === "tool_call" ? (
+            <ToolCallCard key={`tc-${item.toolCallId}`} item={item} />
+          ) : (
             <div
+              key={i}
               className={cn(
-                "max-w-[70%] rounded-lg px-4 py-2.5 text-sm",
-                msg.role === "user"
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "bg-card text-card-foreground",
+                "flex",
+                item.role === "user" ? "justify-end" : "justify-start",
               )}
             >
-              <div className="whitespace-pre-wrap">{msg.text}</div>
+              <div
+                className={cn(
+                  "max-w-[70%] rounded-lg px-4 py-2.5 text-sm",
+                  item.role === "user"
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "bg-card text-card-foreground",
+                )}
+              >
+                <div className="whitespace-pre-wrap">{item.text}</div>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        )}
 
-        {/* Streaming indicator */}
-        {(isThinking || streamingText) && (
+        {/* Streaming text indicator */}
+        {streamingText && (
           <div className="flex justify-start">
             <div className="max-w-[70%] rounded-lg px-4 py-2.5 text-sm bg-card text-card-foreground">
-              {streamingText ? (
-                <div className="whitespace-pre-wrap">{streamingText}</div>
-              ) : (
-                <div className="flex items-center gap-2 text-muted-foreground/50">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Thinking...
-                </div>
-              )}
+              <div className="whitespace-pre-wrap">{streamingText}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Thinking indicator — only when no tokens have arrived yet */}
+        {isThinking && !streamingText && (
+          <div className="flex justify-start">
+            <div className="max-w-[70%] rounded-lg px-4 py-2.5 text-sm bg-card text-card-foreground">
+              <div className="flex items-center gap-2 text-muted-foreground/50">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Thinking...
+              </div>
             </div>
           </div>
         )}
@@ -164,7 +454,7 @@ export function Chat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input area */}
+      {/* Input area — pinned to bottom */}
       <div className="px-6 py-4 border-t border-border/50 shrink-0">
         {!connected && (
           <div className="text-xs text-destructive mb-2">Disconnected — reconnecting...</div>

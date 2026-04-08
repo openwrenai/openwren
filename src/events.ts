@@ -24,6 +24,7 @@ export interface MessageInEvent {
   agentId: string;   // config key (e.g. "atlas", "einstein")
   agentName: string; // display name (e.g. "Atlas")
   text: string;      // raw message text
+  sessionId?: string; // WebUI session UUID — absent for channel sessions (Telegram, Discord)
   timestamp: number; // UTC ms (Date.now())
 }
 
@@ -36,6 +37,7 @@ export interface MessageOutEvent {
   text: string;           // the agent's reply
   compacted: boolean;     // true if the session was compacted during this turn
   nearThreshold: boolean; // true if token estimate is approaching compaction threshold
+  sessionId?: string;     // WebUI session UUID — absent for channel sessions (Telegram, Discord)
   timestamp: number;
 }
 
@@ -45,6 +47,7 @@ export interface AgentTypingEvent {
   userId: string;
   agentId: string;
   agentName: string;
+  sessionId?: string;  // WebUI session UUID — absent for channel sessions (Telegram, Discord)
   timestamp: number;
 }
 
@@ -62,6 +65,7 @@ export interface AgentErrorEvent {
   agentId: string;
   agentName: string;
   error: string; // error message string
+  sessionId?: string;  // WebUI session UUID — absent for channel sessions (Telegram, Discord)
   timestamp: number;
 }
 
@@ -141,6 +145,60 @@ export interface TaskFailedEvent {
   timestamp: number;
 }
 
+/**
+ * A single text token delta from the streaming LLM response.
+ *
+ * Unlike other bus events, token events are NOT broadcast to all clients.
+ * They are sent directly to the requesting WS client via sendTo() in
+ * websocket.ts. This is intentional — token events are high-frequency
+ * (dozens per second) and should only go to the client that sent the message.
+ *
+ * Registered on the bus for type safety only.
+ */
+export interface TokenEvent {
+  channel: string;
+  userId: string;
+  agentId: string;
+  text: string;      // the text delta (a few words or partial word)
+  timestamp: number;
+}
+
+/**
+ * Emitted when the agent loop starts executing a tool call (before the tool runs).
+ * The frontend uses this to render an inline tool card with a spinner.
+ *
+ * Like TokenEvent, sent directly to the requesting WS client, not broadcast.
+ */
+export interface ToolUseEvent {
+  channel: string;
+  userId: string;
+  agentId: string;
+  agentName: string;
+  toolCallId: string;              // unique ID to match with the corresponding ToolResultEvent
+  toolName: string;                // e.g. "save_memory", "read_file"
+  args: Record<string, unknown>;   // the arguments the LLM generated for this tool call
+  timestamp: number;
+}
+
+/**
+ * Emitted after a tool finishes executing. The frontend updates the matching
+ * tool card (by toolCallId) with the result and swaps the spinner for a checkmark.
+ *
+ * Like TokenEvent, sent directly to the requesting WS client, not broadcast.
+ * Result is truncated to 500 chars in websocket.ts to prevent large tool outputs
+ * (e.g. file reads) from flooding the WebSocket connection.
+ */
+export interface ToolResultEvent {
+  channel: string;
+  userId: string;
+  agentId: string;
+  agentName: string;
+  toolCallId: string;   // matches the ToolUseEvent.toolCallId
+  toolName: string;
+  result: string;       // truncated to 500 chars by the WS channel
+  timestamp: number;
+}
+
 /** All tasks in a workflow completed — the entire DAG is done. */
 export interface WorkflowCompletedEvent {
   workflowId: number;
@@ -169,6 +227,11 @@ export interface BusEvents {
   task_completed: TaskCompletedEvent;
   task_failed: TaskFailedEvent;
   workflow_completed: WorkflowCompletedEvent;
+  // Streaming events — registered here for type safety but NOT emitted via bus.emit().
+  // They are sent directly to the requesting WS client via sendTo() in websocket.ts.
+  token: TokenEvent;
+  tool_use: ToolUseEvent;
+  tool_result: ToolResultEvent;
 }
 
 export type BusEventName = keyof BusEvents;

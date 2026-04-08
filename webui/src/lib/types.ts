@@ -91,10 +91,20 @@ export interface WsSendMessage {
 }
 
 // --- WebSocket messages (server → client) ---
+//
+// Event delivery:
+//   - token, tool_use, tool_result: sent DIRECTLY to the requesting client
+//     via sendTo() in websocket.ts. High-frequency, not broadcast.
+//   - message_in, message_out, agent_typing, agent_error: BROADCAST to all
+//     connected clients via the bus. System-wide visibility.
 
+/** A single text delta from the streaming LLM response. */
 export interface WsTokenEvent {
   type: "token";
-  payload: { text: string };
+  payload: {
+    text: string;
+    sessionId?: string;  // WebUI session UUID — filter on this to avoid cross-session leaks
+  };
 }
 
 export interface WsMessageOutEvent {
@@ -104,6 +114,7 @@ export interface WsMessageOutEvent {
     agentName: string;
     text: string;
     compacted?: boolean;
+    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
     timestamp: number;
   };
 }
@@ -113,6 +124,7 @@ export interface WsAgentTypingEvent {
   payload: {
     agentId: string;
     agentName: string;
+    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
     timestamp: number;
   };
 }
@@ -128,6 +140,43 @@ export interface WsAgentErrorEvent {
     agentId: string;
     agentName: string;
     error: string;
+    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
+    timestamp: number;
+  };
+}
+
+/**
+ * Received when the agent starts executing a tool call.
+ * Frontend renders a ToolCallCard with a spinner.
+ */
+export interface WsToolUseEvent {
+  type: "tool_use";
+  payload: {
+    agentId: string;
+    agentName: string;
+    toolCallId: string;   // used to match with the corresponding WsToolResultEvent
+    toolName: string;
+    args: Record<string, unknown>;
+    sessionId?: string;   // WebUI session UUID — filter on this
+    timestamp: number;
+  };
+}
+
+/**
+ * Received when a tool finishes executing.
+ * Frontend updates the matching ToolCallCard (by toolCallId) with the result
+ * and swaps the spinner for a checkmark. Result is truncated to 500 chars
+ * by the backend to avoid flooding the WebSocket.
+ */
+export interface WsToolResultEvent {
+  type: "tool_result";
+  payload: {
+    agentId: string;
+    agentName: string;
+    toolCallId: string;   // matches WsToolUseEvent.toolCallId
+    toolName: string;
+    result: string;       // truncated to 500 chars by websocket.ts
+    sessionId?: string;   // WebUI session UUID — filter on this
     timestamp: number;
   };
 }
@@ -137,4 +186,6 @@ export type WsServerEvent =
   | WsMessageOutEvent
   | WsAgentTypingEvent
   | WsErrorEvent
-  | WsAgentErrorEvent;
+  | WsAgentErrorEvent
+  | WsToolUseEvent
+  | WsToolResultEvent;

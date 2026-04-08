@@ -222,13 +222,19 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
 
     console.log(`[websocket] ${agentConfig.name} ← ${client.userId}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
 
-    // Bus: notify observers that a message arrived
+    // Resolve session ID early — needed for bus events and session file routing.
+    // UUID sessions (from WebUI) use a custom file, otherwise default (main.jsonl).
+    const sessionId = msg.sessionId && msg.sessionId !== "main" ? msg.sessionId : undefined;
+
+    // Bus: notify observers that a message arrived (sessionId included so
+    // the frontend can filter events to the active session)
     bus.emit("message_in", {
       channel: "websocket",
       userId: client.userId,
       agentId,
       agentName: agentConfig.name,
       text,
+      sessionId,
       timestamp: Date.now(),
     });
 
@@ -238,6 +244,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       userId: client.userId,
       agentId,
       agentName: agentConfig.name,
+      sessionId,
       timestamp: Date.now(),
     });
 
@@ -259,8 +266,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       });
     };
 
-    // Resolve session file — UUID sessions use a custom file, otherwise default (main.jsonl)
-    const sessionId = msg.sessionId && msg.sessionId !== "main" ? msg.sessionId : undefined;
+    // Resolve session file path from the sessionId declared above
     const sessionOpts = sessionId
       ? { sessionFile: userNamedSessionPath(client.userId, sessionId) }
       : {};
@@ -270,24 +276,96 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       touchSession(client.userId, sessionId);
     }
 
-    try {
-      const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
+    // ---- Streaming timestamp buffer ----
+      // The model sometimes echoes back injected timestamps (e.g. "[Apr 8, 02:49]")
+      // at the start of its response. We buffer the first ~18 chars to detect and
+      // strip them before they reach the frontend. Once the check is done, all
+      // subsequent deltas pass through with zero overhead.
+      let streamBuffer = "";
+      let bufferFlushed = false;
+      const TIMESTAMP_RE = /\[(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{2}:\d{2}\]\s*/g;
+
+      try {
+        const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
         ...sessionOpts,
         usageContext: { source: "chat", userId: client.userId, sessionId: sessionId ?? "main" },
+        // ---- Streaming callbacks ----
+        // These send events directly to THIS client via sendTo(), NOT through
+        // the bus. This is intentional — token events are high-frequency and
+        // should only go to the client that sent the message, not broadcast
+        // to all connected clients.
+        streamCallback: (delta) => {
+            if (bufferFlushed) {
+              // Past the initial check — passthrough, zero overhead
+            sendTo(client, "token", { text: delta, sessionId });
+            return;
+            }
+
+          streamBuffer += delta;
+
+          // No leading bracket — no timestamp possible, flush immediately
+          if (!streamBuffer.startsWith("[")) {
+              bufferFlushed = true;
+            sendTo(client, "token", { text: streamBuffer, sessionId });
+            return;
+            }
+
+          // Starts with [ but not enough chars yet — keep buffering
+          // Full timestamp is max ~18 chars: "[Apr 8, 02:49] "
+          if (streamBuffer.length < 18) return;
+
+          // Enough chars — check for timestamp, strip if found, flush
+          bufferFlushed = true;
+          const cleaned = streamBuffer.replace(TIMESTAMP_RE, "");
+          if (cleaned) {
+              sendTo(client, "token", { text: cleaned, sessionId });
+            }
+          },
+          // Emits tool_use so the frontend can show inline tool call cards
+          // (e.g. "⚙ Using save_memory...") with a spinner while the tool runs
+          onToolUse: (toolCallId, toolName, args) => {
+            sendTo(client, "tool_use", {
+              agentId,
+              agentName: agentConfig.name,
+              toolCallId,
+              toolName,
+              args,
+              sessionId,
+              timestamp: Date.now(),
+            });
+          },
+          // Emits tool_result so the frontend can update the tool card with
+          // the result and swap the spinner for a checkmark.
+          // Result truncated to 500 chars to prevent large outputs (e.g. file
+          // reads) from flooding the WebSocket connection.
+          onToolResult: (toolCallId, toolName, result) => {
+            sendTo(client, "tool_result", {
+              agentId,
+              agentName: agentConfig.name,
+              toolCallId,
+              toolName,
+              result: result.slice(0, 500),
+              sessionId,
+              timestamp: Date.now(),
+            });
+          },
       });
       console.log(
         `[websocket] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
       );
 
-      // Bus: broadcast the agent's response to WS observers
-      bus.emit("message_out", {
+      // Bus: broadcast the agent's response to WS observers.
+      // sessionId is included so the frontend can filter events to the
+        // active session and ignore responses from other sessions/channels.
+        bus.emit("message_out", {
         channel: "websocket",
         userId: client.userId,
         agentId,
         agentName: agentConfig.name,
         text: result.text,
         compacted: result.compacted,
-        nearThreshold: result.nearThreshold,
+          nearThreshold: result.nearThreshold,
+        sessionId,
         timestamp: Date.now(),
       });
 
@@ -309,7 +387,8 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
         agentId,
         agentName: agentConfig.name,
         error,
-        timestamp: Date.now(),
+        sessionId,
+          timestamp: Date.now(),
       });
     }
   }
