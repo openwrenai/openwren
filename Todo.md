@@ -105,13 +105,29 @@ UX improvements:
 - [x] Two-state chat input — **Fresh chat:** textarea centered vertically+horizontally on screen, auto-focused, "How can I help?" heading, send button inside textarea (bottom-right). **Active chat:** textarea pinned to bottom of screen, messages above, session header at top. Transition happens when first message is sent.
 - [x] Auto-growing textarea — `useAutoResize` hook adjusts height to fit content on every input change. Fresh chat starts at `rows={3}`. Resets to base height when input is cleared after sending.
 Session history loading (paginated):
-- [ ] Backend: `GET /api/sessions/:id/messages?limit=50` — reads session JSONL from the end, returns the last N messages transformed into ChatItem-compatible shape (TextItem for user/assistant text, ToolCallItem for tool-call/tool-result pairs). Includes total message count in response for pagination awareness.
-- [ ] Backend: `GET /api/sessions/:id/messages?limit=50&before=<timestamp>` — returns N messages older than the given timestamp. Used for scroll-up pagination to load earlier history.
-- [ ] Backend: Transform JSONL `Message` objects (AI SDK format with role user/assistant/tool, content arrays with text/tool-call/tool-result blocks) into flat ChatItem array the frontend can render directly.
-- [ ] Frontend: On session select, fetch last 50 messages and populate `items` state. Show messages immediately (no streaming — these are historical).
-- [ ] Frontend: Scroll-up pagination — when user scrolls to the top of the message area, fetch the next 50 older messages and prepend to `items`. Maintain scroll position so the view doesn't jump.
-- [ ] Frontend: Show a "Load more" indicator or spinner at the top while fetching older messages. Hide when no more messages available (total count reached).
-- [ ] Ghost session cleanup — checked off, no code needed. Lazy session creation prevents new ghosts. Existing empty files manually deleted.
+- [x] Backend: `GET /api/sessions/:id/messages?limit=50` — reads session JSONL from the end, returns the last N messages transformed into ChatItem-compatible shape (TextItem for user/assistant text, ToolCallItem for tool-call/tool-result pairs). Includes total message count in response for pagination awareness.
+- [x] Backend: `GET /api/sessions/:id/messages?limit=50&before=<timestamp>` — returns N messages older than the given timestamp. Used for scroll-up pagination to load earlier history.
+- [x] Backend: Transform JSONL `Message` objects (AI SDK format with role user/assistant/tool, content arrays with text/tool-call/tool-result blocks) into flat ChatItem array the frontend can render directly. Timestamps stripped from text content.
+- [x] Frontend: On session select, fetch last 50 messages and populate `items` state. Show messages immediately (no streaming — these are historical). Skips fetch during lazy creation (items already has user's first message).
+- [x] Frontend: Scroll-up pagination with prefetch — when user scrolls past 80% of loaded messages (near the top, not at it), trigger fetch for the next 50 older messages and prepend to `items`. By the time the user reaches the actual top, the batch is already loaded. Maintain scroll position so the view doesn't jump. No loading indicator — prefetch is invisible to the user.
+- [x] Ghost session cleanup — no code needed. Lazy session creation prevents new ghosts. Existing empty files manually deleted.
+- [x] Bug fix: Timestamp buffering in `websocket.ts` `streamCallback` — buffers first ~18 chars of each streaming response to detect and strip echoed timestamps before they reach the frontend. If first char isn't `[`, flushes immediately (zero latency). After initial check, all subsequent deltas pass through with zero overhead.
+- [x] Frontend: `stripTimestamps()` utility in `webui/src/lib/utils.ts` — shared regex for stripping `[Mon DD, HH:MM]` patterns. Applied in `tool_use` flush and `message_out` finalization paths.
+
+Agent picker in textarea (fresh chat only):
+ChatInput component:
+- [ ] Extract `ChatInput` component into `webui/src/components/chat/ChatInput.tsx` — single component used in both fresh and active modes. Props: `mode: "fresh" | "active"`, `agentId`, `onAgentChange`, `agents` list, `disabled`, `onSend`, `connected`.
+- [ ] Composite container — outer div styled as a single input (border, rounded corners, background). Inside: (1) borderless auto-growing textarea (~2 rows for typing), (2) bottom row with agent dropdown right-aligned.
+- [ ] Mode `"fresh"`: agent dropdown enabled, user picks which agent to chat with.
+- [ ] Mode `"active"`: agent dropdown visible but disabled/grayed — shows which agent is locked for this session.
+- [ ] Remove agent selector from `ChatSidebar` — it moves into `ChatInput`.
+- [ ] Active chat textarea height matches fresh chat (~3 rows: 2 for text, 1 for agent picker row).
+- [ ] Enter to send, Shift+Enter for newline. No send button in either mode.
+- [ ] Remove send button from both fresh and active chat states.
+
+Auto-naming sessions:
+- [ ] After agent's first response in a new session, make a lightweight LLM call to generate a 3-5 word session title. `PATCH /api/sessions/:id` with the generated label. Session starts as "New Chat", gets renamed automatically. Sidebar refreshes to show the new name.
+
 - [ ] Session header dropdown — clickable with Rename, Delete, Reset, Force compaction actions
 - [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
 - [ ] Session actions — reset session, force compaction, view archive list

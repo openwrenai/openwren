@@ -4,7 +4,7 @@ import { Send, MessageSquare, Loader2, Wrench, ChevronDown, ChevronRight, Check 
 import { useWebSocket } from "@/hooks/useWebSocket.ts";
 import { api } from "@/lib/api.ts";
 import { cn, stripTimestamps } from "@/lib/utils.ts";
-import type { SessionEntry, WsServerEvent } from "@/lib/types.ts";
+import type { SessionEntry, SessionMessagesResponse, WsServerEvent } from "@/lib/types.ts";
 
 // ---------------------------------------------------------------------------
 // Chat item types — messages + tool calls rendered in order
@@ -141,7 +141,11 @@ export function Chat() {
   const sessionIdRef = useRef<string | undefined>(params.sessionId);
   const [session, setSession] = useState<SessionEntry | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Pagination state for session history loading
+  const [totalMessages, setTotalMessages] = useState(0);  // total in session JSONL
+  const isFetchingRef = useRef(false);                     // prevents concurrent fetches
 
   // Sync activeSessionId when URL params change (e.g. clicking a session in sidebar)
   useEffect(() => {
@@ -166,16 +170,54 @@ export function Chat() {
   // Drives the layout transition from centered (fresh) to bottom-pinned (active).
   const isActive = !!activeSessionId && items.length > 0;
 
-  // Load session metadata when activeSessionId changes
+  // Load session metadata + message history when activeSessionId changes.
+  // On initial load (clicking an existing session in the sidebar), fetches
+  // the last 50 messages and populates items. On lazy creation (first message
+  // just sent), items already has the user's message — we merge, not replace.
   useEffect(() => {
     if (!activeSessionId) {
       setSession(null);
+      setTotalMessages(0);
       return;
     }
 
+    // Fetch session metadata
     api.get<SessionEntry & { id: string }>(`/api/sessions/${activeSessionId}`)
       .then((s) => setSession(s))
       .catch(() => setSession(null));
+
+    // Fetch message history — only if items is empty (not during lazy creation
+    // where the user's first message is already in items)
+    if (items.length === 0) {
+      api.get<SessionMessagesResponse>(`/api/sessions/${activeSessionId}/messages?limit=50`)
+        .then((res) => {
+          setTotalMessages(res.total);
+          if (res.messages.length > 0) {
+            const loaded: ChatItem[] = res.messages.map((m) => {
+              if (m.kind === "tool_call") {
+                return {
+                  kind: "tool_call" as const,
+                  toolCallId: m.toolCallId!,
+                  toolName: m.toolName!,
+                  args: m.args ?? {},
+                  result: m.result,
+                  timestamp: m.timestamp,
+                };
+              }
+              return {
+                kind: "text" as const,
+                role: m.role as "user" | "assistant",
+                text: m.text ?? "",
+                timestamp: m.timestamp,
+              };
+            });
+            setItems(loaded);
+          }
+        })
+        .catch(() => {
+          // Session exists but messages couldn't be loaded — not fatal
+        });
+    }
   }, [activeSessionId]);
 
   // Subscribe to WS events for the active session.
@@ -291,6 +333,78 @@ export function Chat() {
   }, [items, streamingText]);
 
   // -------------------------------------------------------------------------
+  // Scroll-up prefetch — loads older messages when user scrolls near the top.
+  //
+  // Triggers at 20% from the top (80% through loaded messages). By the time
+  // the user reaches the actual top, the next batch is already loaded.
+  // No loading indicator — prefetch is invisible to the user.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      // Only prefetch if: we have a session, there are more messages to load,
+      // and we're not already fetching
+      if (!activeSessionId || isFetchingRef.current) return;
+      if (items.length >= totalMessages) return;
+
+      // Trigger when scrolled to within 20% of the top
+      const threshold = container.scrollHeight * 0.2;
+      if (container.scrollTop > threshold) return;
+
+      // Find the oldest message timestamp for the `before` param
+      const oldest = items[0]?.timestamp;
+      if (!oldest) return;
+
+      isFetchingRef.current = true;
+      const prevScrollHeight = container.scrollHeight;
+
+      api.get<SessionMessagesResponse>(
+        `/api/sessions/${activeSessionId}/messages?limit=50&before=${oldest}`
+      )
+        .then((res) => {
+          setTotalMessages(res.total);
+          if (res.messages.length > 0) {
+            const older: ChatItem[] = res.messages.map((m) => {
+              if (m.kind === "tool_call") {
+                return {
+                  kind: "tool_call" as const,
+                  toolCallId: m.toolCallId!,
+                  toolName: m.toolName!,
+                  args: m.args ?? {},
+                  result: m.result,
+                  timestamp: m.timestamp,
+                };
+              }
+              return {
+                kind: "text" as const,
+                role: m.role as "user" | "assistant",
+                text: m.text ?? "",
+                timestamp: m.timestamp,
+              };
+            });
+            // Prepend older messages and maintain scroll position
+            setItems((prev) => [...older, ...prev]);
+            // After React renders the new items, restore scroll position
+            // so the view doesn't jump to the top
+            requestAnimationFrame(() => {
+              const newScrollHeight = container.scrollHeight;
+              container.scrollTop += newScrollHeight - prevScrollHeight;
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          isFetchingRef.current = false;
+        });
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [activeSessionId, items, totalMessages]);
+
+  // -------------------------------------------------------------------------
   // handleSend — lazy session creation
   //
   // Fresh chat (no sessionId): creates session via POST /api/sessions, then
@@ -404,7 +518,7 @@ export function Chat() {
       )}
 
       {/* Messages + tool calls */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
         {items.map((item, i) =>
           item.kind === "tool_call" ? (
             <ToolCallCard key={`tc-${item.toolCallId}`} item={item} />

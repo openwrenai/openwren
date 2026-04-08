@@ -66,6 +66,24 @@ export interface SessionListResponse {
   sessions: SessionEntry[];
 }
 
+/**
+ * Response from GET /api/sessions/:id/messages — paginated session history.
+ * Messages are pre-transformed by the backend into ChatItem-compatible shape.
+ */
+export interface SessionMessagesResponse {
+  messages: Array<{
+    kind: "text" | "tool_call";
+    role?: "user" | "assistant";
+    text?: string;
+    toolCallId?: string;
+    toolName?: string;
+    args?: Record<string, unknown>;
+    result?: string;
+    timestamp: number;
+  }>;
+  total: number;  // total message count in session — for pagination awareness
+}
+
 export interface SessionMessage {
   role: "user" | "assistant" | "tool";
   content: string | MessageContent[];
