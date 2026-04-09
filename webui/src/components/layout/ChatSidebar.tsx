@@ -3,12 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { Plus, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils.ts";
 import { api } from "@/lib/api.ts";
-import type { SessionEntry, SessionListResponse, StatusResponse } from "@/lib/types.ts";
+import type { SessionEntry, SessionListResponse } from "@/lib/types.ts";
 
 interface ChatSidebarProps {
   activeSessionId?: string;
-  activeAgentId: string;
-  onAgentChange: (agentId: string) => void;
   onNewChat: () => void;
 }
 
@@ -23,34 +21,26 @@ function timeAgo(ms: number): string {
   return `${days}d ago`;
 }
 
-export function ChatSidebar({ activeSessionId, activeAgentId, onAgentChange, onNewChat }: ChatSidebarProps) {
+export function ChatSidebar({ activeSessionId, onNewChat }: ChatSidebarProps) {
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
-  const [agents, setAgents] = useState<StatusResponse["agents"]>([]);
 
-  const fetchData = useCallback(async () => {
+  const fetchSessions = useCallback(async () => {
     try {
-      const [sessRes, statusRes] = await Promise.all([
-        api.get<SessionListResponse>("/api/sessions"),
-        api.get<StatusResponse>("/api/status"),
-      ]);
-      setSessions(sessRes.sessions);
-      setAgents(statusRes.agents);
+      const res = await api.get<SessionListResponse>("/api/sessions");
+      setSessions(res.sessions);
     } catch {
       // silently fail — sidebar still renders with empty state
     }
   }, []);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Group sessions by agent
-  const agentSessions = sessions.filter((s) => s.agentId === activeAgentId);
+    fetchSessions();
+  }, [fetchSessions]);
 
   return (
     <aside className="flex flex-col w-60 shrink-0 bg-background text-sidebar-foreground overflow-hidden">
-      {/* New chat + agent selector */}
-      <div className="px-4 pt-5 pb-2 space-y-3">
+      {/* New chat */}
+      <div className="px-4 pt-5 pb-2">
         <button
           onClick={onNewChat}
           className="flex items-center gap-2 w-full px-3 py-2.5 rounded-lg bg-sidebar-accent text-sidebar-accent-foreground text-[14px] font-medium hover:bg-sidebar-accent/80 transition-colors"
@@ -58,27 +48,16 @@ export function ChatSidebar({ activeSessionId, activeAgentId, onAgentChange, onN
           <Plus className="h-4 w-4" />
           New Chat
         </button>
-
-        {/* Agent selector */}
-        <select
-          value={activeAgentId}
-          onChange={(e) => onAgentChange(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg bg-card border border-border text-sm text-foreground"
-        >
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
       </div>
 
-      {/* Sessions list */}
+      {/* Sessions list — all sessions, sorted by updatedAt (API handles sorting) */}
       <nav className="flex-1 overflow-y-auto px-4 pt-3">
         <div className="px-2 mb-2">
           <span className="text-[13px] font-medium text-muted-foreground/40">Sessions</span>
         </div>
         <div className="space-y-0.5">
-          {agentSessions.length > 0 ? (
-            agentSessions.map((session) => (
+          {sessions.length > 0 ? (
+            sessions.map((session) => (
               <Link
                 key={session.id}
                 to="/chat/$sessionId"

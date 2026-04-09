@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "@tanstack/react-router";
-import { Send, MessageSquare, Loader2, Wrench, ChevronDown, ChevronRight, Check } from "lucide-react";
+import { Loader2, Wrench, ChevronDown, ChevronRight, Check } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket.ts";
 import { api } from "@/lib/api.ts";
 import { cn, stripTimestamps } from "@/lib/utils.ts";
-import type { SessionEntry, SessionMessagesResponse, WsServerEvent } from "@/lib/types.ts";
+import { ChatInput } from "@/components/chat/ChatInput.tsx";
+import type { SessionEntry, SessionMessagesResponse, StatusResponse, WsServerEvent } from "@/lib/types.ts";
 
 // ---------------------------------------------------------------------------
 // Chat item types — messages + tool calls rendered in order
@@ -90,22 +91,7 @@ function ToolCallCard({ item }: { item: ToolCallItem }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Auto-growing textarea hook
-//
-// Adjusts textarea height to fit content. Resets to single row when value
-// is cleared (after sending a message). Works in both centered (fresh) and
-// bottom-pinned (active) states.
-// ---------------------------------------------------------------------------
 
-function useAutoResize(ref: React.RefObject<HTMLTextAreaElement | null>, value: string) {
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, [ref, value]);
-}
 
 // ---------------------------------------------------------------------------
 // Chat page — two-state layout
@@ -121,9 +107,10 @@ export function Chat() {
 
   const { connected, send, subscribe } = useWebSocket();
   const [items, setItems] = useState<ChatItem[]>([]);
-  const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [agentId, setAgentId] = useState("atlas");
+  const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([]);
   // streamingRef tracks the accumulated streaming text as a mutable ref.
   // WHY a ref instead of reading streamingText state:
   // React StrictMode double-invokes state updater functions to verify they're pure.
@@ -142,7 +129,6 @@ export function Chat() {
   const [session, setSession] = useState<SessionEntry | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   // Pagination state for session history loading
   const [totalMessages, setTotalMessages] = useState(0);  // total in session JSONL
   const isFetchingRef = useRef(false);                     // prevents concurrent fetches
@@ -163,8 +149,18 @@ export function Chat() {
     }
   }, [params.sessionId]);
 
-  // Auto-grow textarea as user types or adds newlines with Shift+Enter
-  useAutoResize(inputRef, input);
+  // Fetch agent list once on mount
+  useEffect(() => {
+    api.get<StatusResponse>("/api/status")
+        .then((res) => {
+        setAgents(res.agents.map((a) => ({ id: a.id, name: a.name })));
+        // Default to first agent if current agentId isn't in the list
+        if (res.agents.length > 0 && !res.agents.some((a) => a.id === agentId)) {
+          setAgentId(res.agents[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // The "active" state: we have a session AND at least one message.
   // Drives the layout transition from centered (fresh) to bottom-pinned (active).
@@ -413,24 +409,21 @@ export function Chat() {
   //
   // Active chat (has sessionId): sends the message directly via WS.
   // -------------------------------------------------------------------------
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (text: string) => {
     if (!text || isThinking) return;
 
     // Add user message to the UI immediately (optimistic)
     setItems((prev) => [...prev, { kind: "text", role: "user", text, timestamp: Date.now() }]);
-    setInput("");
 
     if (!activeSessionId) {
       // Lazy session creation — create on first message, not on "New Chat"
-      try {
-        const agentId = session?.agentId ?? "atlas";
-        const res = await api.post<{ id: string }>("/api/sessions", {
-          agentId,
-          label: "New Chat",
+        try {
+          const res = await api.post<{ id: string }>("/api/sessions", {
+            agentId,
+            label: "New Chat",
         });
-        // Update state + ref SYNCHRONOUSLY so the WS event handler can match
-        // events for this session immediately
+          // Update state + ref SYNCHRONOUSLY so the WS event handler can match
+          // events for this session immediately
         setActiveSessionId(res.id);
         sessionIdRef.current = res.id;
         // Update URL cosmetically WITHOUT triggering a route change.
@@ -439,27 +432,18 @@ export function Chat() {
         window.history.replaceState(null, "", `/chat/${res.id}`);
         // Send the message with the newly created sessionId
         send({ type: "message", agentId, sessionId: res.id, text });
-      } catch (err) {
+        } catch (err) {
         console.error("Failed to create session:", err);
         setItems((prev) => [...prev, {
-          kind: "text", role: "assistant",
-          text: "Error: Failed to create session. Please try again.",
-          timestamp: Date.now(),
-        }]);
+            kind: "text", role: "assistant",
+            text: "Error: Failed to create session. Please try again.",
+            timestamp: Date.now(),
+          }]);
+        }
+      } else {
+        send({ type: "message", agentId: session?.agentId ?? agentId, sessionId: activeSessionId, text });
       }
-    } else {
-      send({ type: "message", agentId: session?.agentId ?? "atlas", sessionId: activeSessionId, text });
-    }
-
-    inputRef.current?.focus();
-  }, [input, activeSessionId, isThinking, send, session]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
+    }, [activeSessionId, isThinking, send, session, agentId]);
 
   // -------------------------------------------------------------------------
   // Render — two-state layout
@@ -481,30 +465,19 @@ export function Chat() {
             <div className="text-xs text-destructive text-center">Disconnected — reconnecting...</div>
           )}
 
-          <div className="relative">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
-              autoFocus
-              disabled={!connected || isThinking}
-              rows={3}
-              className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+          <ChatInput
+            mode="fresh"
+              agentId={agentId}
+              onAgentChange={setAgentId}
+              agents={agents}
+              onSend={handleSend}
+              disabled={isThinking}
+              connected={connected}
             />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || !connected || isThinking}
-              className="absolute right-3 bottom-3 p-1.5 rounded-lg bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Send className="h-4 w-4" />
-            </button>
           </div>
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
   // State 2: Active chat — session header, messages, bottom-pinned input
   return (
@@ -573,26 +546,16 @@ export function Chat() {
         {!connected && (
           <div className="text-xs text-destructive mb-2">Disconnected — reconnecting...</div>
         )}
-        <div className="flex gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            disabled={!connected || isThinking}
-            rows={1}
-            className="flex-1 resize-none rounded-lg border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+        <ChatInput
+          mode="active"
+            agentId={session?.agentId ?? agentId}
+            onAgentChange={setAgentId}
+            agents={agents}
+            onSend={handleSend}
+            disabled={isThinking}
+            connected={connected}
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || !connected || isThinking}
-            className="px-4 py-2.5 rounded-lg bg-sidebar-accent text-sidebar-accent-foreground text-sm font-medium hover:bg-sidebar-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="h-4 w-4" />
-          </button>
         </div>
-      </div>
     </div>
   );
 }
