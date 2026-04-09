@@ -458,7 +458,9 @@ export function Chat() {
             <h1 className="text-xl font-semibold text-foreground">
               How can I help?
             </h1>
-            <p className="text-sm text-muted-foreground/50">Start a conversation</p>
+            <p className="text-sm text-muted-foreground/50">
+                Chat with {agents.find((a) => a.id === agentId)?.name ?? agentId}
+            </p>
           </div>
 
           {!connected && (
@@ -484,7 +486,7 @@ export function Chat() {
     <div className="flex flex-col h-full">
       {/* Session header */}
       {session && (
-        <div className="px-6 py-3 border-b border-border/50 shrink-0">
+        <div className="px-6 py-3 shrink-0">
           <div className="text-sm font-medium text-foreground">{session.label}</div>
           <div className="text-xs text-muted-foreground/50">{session.agentId}</div>
         </div>
@@ -508,7 +510,7 @@ export function Chat() {
                   "max-w-[70%] rounded-lg px-4 py-2.5 text-sm",
                   item.role === "user"
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "bg-card text-card-foreground",
+                    : "text-foreground/80",
                 )}
               >
                 <div className="whitespace-pre-wrap">{item.text}</div>
@@ -520,7 +522,7 @@ export function Chat() {
         {/* Streaming text indicator */}
         {streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[70%] rounded-lg px-4 py-2.5 text-sm bg-card text-card-foreground">
+            <div className="max-w-[70%] rounded-lg px-4 py-2.5 text-sm text-foreground/80">
               <div className="whitespace-pre-wrap">{streamingText}</div>
             </div>
           </div>

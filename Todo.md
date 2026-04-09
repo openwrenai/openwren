@@ -114,16 +114,26 @@ Session history loading (paginated):
 - [x] Bug fix: Timestamp buffering in `websocket.ts` `streamCallback` — buffers first ~18 chars of each streaming response to detect and strip echoed timestamps before they reach the frontend. If first char isn't `[`, flushes immediately (zero latency). After initial check, all subsequent deltas pass through with zero overhead.
 - [x] Frontend: `stripTimestamps()` utility in `webui/src/lib/utils.ts` — shared regex for stripping `[Mon DD, HH:MM]` patterns. Applied in `tool_use` flush and `message_out` finalization paths.
 
-Agent picker in textarea (fresh chat only):
 ChatInput component:
-- [ ] Extract `ChatInput` component into `webui/src/components/chat/ChatInput.tsx` — single component used in both fresh and active modes. Props: `mode: "fresh" | "active"`, `agentId`, `onAgentChange`, `agents` list, `disabled`, `onSend`, `connected`.
-- [ ] Composite container — outer div styled as a single input (border, rounded corners, background). Inside: (1) borderless auto-growing textarea (~2 rows for typing), (2) bottom row with agent dropdown right-aligned.
-- [ ] Mode `"fresh"`: agent dropdown enabled, user picks which agent to chat with.
-- [ ] Mode `"active"`: agent dropdown visible but disabled/grayed — shows which agent is locked for this session.
-- [ ] Remove agent selector from `ChatSidebar` — it moves into `ChatInput`.
-- [ ] Active chat textarea height matches fresh chat (~3 rows: 2 for text, 1 for agent picker row).
-- [ ] Enter to send, Shift+Enter for newline. No send button in either mode.
-- [ ] Remove send button from both fresh and active chat states.
+- [x] Extract `ChatInput` component into `webui/src/components/chat/ChatInput.tsx` — single component used in both fresh and active modes. Props: `mode: "fresh" | "active"`, `agentId`, `onAgentChange`, `agents` list, `disabled`, `onSend`, `connected`.
+- [x] Composite container — outer div styled as a single input (border, rounded corners, background). Inside: (1) borderless auto-growing textarea (~3 rows for typing), (2) bottom row with agent dropdown right-aligned.
+- [x] Mode `"fresh"`: agent dropdown enabled, user picks which agent to chat with.
+- [x] Mode `"active"`: agent dropdown visible but disabled/grayed — shows which agent is locked for this session.
+- [x] Remove agent selector from `ChatSidebar` — it moves into `ChatInput`.
+- [x] Enter to send, Shift+Enter for newline. No send button in either mode.
+- [x] Remove send button from both fresh and active chat states.
+- [x] Custom agent dropdown — replaced native `<select>` with custom `AgentPicker` component (button + positioned list with checkmark on selected item, outside-click-to-close). No OS-chrome dropdown.
+- [x] Agent state ownership — `agentId` and agent list moved from `ChatLayout`/`ChatSidebar` into `Chat.tsx`. ChatLayout and ChatSidebar simplified (no agent props).
+- [x] ChatSidebar cleanup — removed agent filter, shows all sessions sorted by `updatedAt` from API. Removed session icons, compacted item height.
+- [x] Fresh chat subtitle — dynamic "Chat with {agentName}" instead of static "Start a conversation".
+
+Theme & visual polish:
+- [x] Dark theme — converted from oklch to hex. Background `#12141a`, card `#1e2028`, accent `#30323b`. Warm-neutral tint matching professional dark UIs.
+- [x] Light theme — converted from oklch to hex. Off-white background `#f5f5f5`, white cards `#ffffff`, soft borders `#e0e0e0`.
+- [x] Sidebar visual separation — background color difference only, no CSS border between sidebar and content area.
+- [x] Removed session header border — clean borderless transition from header to messages.
+- [x] Assistant message styling — removed bubble background (`bg-card`), softened text to `text-foreground/80`. Assistant text sits directly on page background like modern chat UIs.
+- [x] Custom scrollbars — thin (4px), near-invisible at rest (5% opacity), subtle on hover (12%). Replaces thick native browser scrollbar.
 
 Auto-naming sessions:
 - [ ] After agent's first response in a new session, make a lightweight LLM call to generate a 3-5 word session title. `PATCH /api/sessions/:id` with the generated label. Session starts as "New Chat", gets renamed automatically. Sidebar refreshes to show the new name.

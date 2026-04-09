@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils.ts";
 
 // ---------------------------------------------------------------------------
@@ -12,6 +13,83 @@ function useAutoResize(ref: React.RefObject<HTMLTextAreaElement | null>, value: 
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }, [ref, value]);
+}
+
+// ---------------------------------------------------------------------------
+// AgentPicker — custom dropdown replacing native <select>
+// ---------------------------------------------------------------------------
+
+interface Agent {
+  id: string;
+  name: string;
+}
+
+function AgentPicker({
+  agents,
+  value,
+  onChange,
+  disabled,
+}: {
+  agents: Agent[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selected = agents.find((a) => a.id === value);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => !disabled && setOpen(!open)}
+        disabled={disabled}
+        className={cn(
+          "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors",
+          "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+          disabled && "opacity-50 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground",
+        )}
+      >
+        <span>{selected?.name ?? value}</span>
+        <ChevronDown className="h-3 w-3" />
+      </button>
+
+      {open && (
+        <div className="absolute top-full right-0 mt-1 min-w-[140px] max-h-[240px] overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg z-50">
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => { onChange(a.id); setOpen(false); }}
+              className={cn(
+                "flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-xs text-left transition-colors",
+                a.id === value
+                  ? "text-foreground bg-accent"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+              )}
+            >
+              <Check className={cn("h-3 w-3 shrink-0", a.id !== value && "invisible")} />
+              {a.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -31,11 +109,6 @@ function useAutoResize(ref: React.RefObject<HTMLTextAreaElement | null>, value: 
 //
 // Enter sends, Shift+Enter inserts newline. No send button.
 // ---------------------------------------------------------------------------
-
-interface Agent {
-  id: string;
-  name: string;
-}
 
 interface ChatInputProps {
   mode: "fresh" | "active";
@@ -88,8 +161,8 @@ export function ChatInput({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border bg-card overflow-hidden",
-        "focus-within:ring-1 focus-within:ring-ring",
+        "rounded-2xl border border-border bg-card transition-colors",
+        "focus-within:border-border/80",
         isDisabled && "opacity-50",
       )}
     >
@@ -106,21 +179,13 @@ export function ChatInput({
       />
 
       {/* Bottom row — agent picker right-aligned */}
-      <div className="flex items-center justify-end px-3 pb-2">
-        <select
+      <div className="flex items-center justify-end px-2 pb-2">
+        <AgentPicker
+          agents={agents}
           value={agentId}
-          onChange={(e) => onAgentChange(e.target.value)}
+          onChange={onAgentChange}
           disabled={mode === "active" || isDisabled}
-          className={cn(
-            "px-2 py-1 rounded-md text-xs bg-transparent border border-border/50 text-muted-foreground",
-            "focus:outline-none focus:ring-1 focus:ring-ring",
-            mode === "active" && "opacity-50 cursor-not-allowed",
-          )}
-        >
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
+        />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "@tanstack/react-router";
-import { Plus, MessageSquare } from "lucide-react";
+import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils.ts";
 import { api } from "@/lib/api.ts";
 import type { SessionEntry, SessionListResponse } from "@/lib/types.ts";
@@ -38,7 +38,7 @@ export function ChatSidebar({ activeSessionId, onNewChat }: ChatSidebarProps) {
   }, [fetchSessions]);
 
   return (
-    <aside className="flex flex-col w-60 shrink-0 bg-background text-sidebar-foreground overflow-hidden">
+    <aside className="flex flex-col w-60 shrink-0 bg-sidebar text-sidebar-foreground overflow-hidden">
       {/* New chat */}
       <div className="px-4 pt-5 pb-2">
         <button
@@ -63,24 +63,20 @@ export function ChatSidebar({ activeSessionId, onNewChat }: ChatSidebarProps) {
                 to="/chat/$sessionId"
                 params={{ sessionId: session.id }}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] transition-colors no-underline",
+                  "block px-3 py-1.5 rounded-md text-[13px] transition-colors no-underline",
                   activeSessionId === session.id
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground hover:bg-sidebar-accent/40 hover:text-sidebar-accent-foreground",
                 )}
               >
-                <MessageSquare className="h-4 w-4 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{session.label}</div>
-                  <div className="text-[11px] text-muted-foreground/40">{timeAgo(session.updatedAt)}</div>
-                </div>
-              </Link>
+                <div className="truncate">{session.label}</div>
+                <div className="text-[11px] text-muted-foreground/40">{timeAgo(session.updatedAt)}</div>
+                </Link>
             ))
           ) : (
-            <div className="flex items-center gap-3 px-3 py-2.5 text-[13px] text-muted-foreground/40">
-              <MessageSquare className="h-4 w-4 shrink-0" />
+            <div className="px-3 py-1.5 text-[13px] text-muted-foreground/40">
               No sessions yet
-            </div>
+              </div>
           )}
         </div>
       </nav>
