@@ -5,13 +5,15 @@ function getToken(): string | null {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
 
   const token = getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
   }
 
   const res = await fetch(`${BASE_URL}${path}`, {

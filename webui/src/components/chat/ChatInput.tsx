@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Check } from "lucide-react";
+import { ChevronDown, Check, SendHorizonal } from "lucide-react";
 import { cn } from "@/lib/utils.ts";
 
 // ---------------------------------------------------------------------------
@@ -158,35 +158,54 @@ export function ChatInput({
 
   const isDisabled = disabled || !connected;
 
-  return (
-    <div
-      className={cn(
+  const hasInput = input.trim().length > 0;
+
+    return (
+      <div
+        className={cn(
         "rounded-2xl border border-border bg-card transition-colors",
-        "focus-within:border-border/80",
-        isDisabled && "opacity-50",
-      )}
-    >
-      {/* Textarea — borderless, fills the container */}
-      <textarea
-        ref={inputRef}
-        value={input}
+          isDisabled && "opacity-50",
+        )}
+      >
+        {/* Textarea — borderless, fills the container */}
+        <textarea
+          ref={inputRef}
+          value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Type a message..."
-        disabled={isDisabled}
-        rows={3}
-        className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none disabled:cursor-not-allowed"
-      />
-
-      {/* Bottom row — agent picker right-aligned */}
-      <div className="flex items-center justify-end px-2 pb-2">
-        <AgentPicker
-          agents={agents}
-          value={agentId}
-          onChange={onAgentChange}
-          disabled={mode === "active" || isDisabled}
+          placeholder="Type a message..."
+          disabled={isDisabled}
+          rows={mode === "fresh" ? 3 : 1}
+          className={cn(
+            "w-full resize-none bg-transparent px-4 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none disabled:cursor-not-allowed",
+            mode === "fresh" ? "pt-3 pb-1" : "pt-2 pb-1",
+          )}
         />
+
+        {/* Bottom row — agent picker (fresh only) left, send button right */}
+        <div className={cn("flex items-center px-2 pb-2", mode === "fresh" ? "justify-between" : "justify-end")}>
+          {mode === "fresh" && (
+            <AgentPicker
+              agents={agents}
+              value={agentId}
+              onChange={onAgentChange}
+              disabled={isDisabled}
+            />
+          )}
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!hasInput || isDisabled}
+            className={cn(
+              "flex items-center justify-center size-8 rounded-lg transition-colors",
+              hasInput && !isDisabled
+                ? "bg-accent text-foreground hover:bg-accent/80 cursor-pointer"
+                : "text-muted-foreground/30 cursor-not-allowed",
+          )}
+          >
+            <SendHorizonal className="h-4 w-4" />
+          </button>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }

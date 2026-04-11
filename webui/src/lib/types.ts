@@ -7,6 +7,7 @@ export interface StatusResponse {
     name: string;
     model: string | null;
     role: string | null;
+    description: string | null;
   }>;
   agentCount: number;
   sessionCount: number;
@@ -163,6 +164,16 @@ export interface WsAgentErrorEvent {
   };
 }
 
+/** Emitted when a session is auto-renamed after the first agent response. */
+export interface WsSessionRenamedEvent {
+  type: "session_renamed";
+  payload: {
+    sessionId: string;
+    label: string;
+    timestamp: number;
+  };
+}
+
 /**
  * Received when the agent starts executing a tool call.
  * Frontend renders a ToolCallCard with a spinner.
@@ -206,4 +217,5 @@ export type WsServerEvent =
   | WsErrorEvent
   | WsAgentErrorEvent
   | WsToolUseEvent
-  | WsToolResultEvent;
+  | WsToolResultEvent
+  | WsSessionRenamedEvent;

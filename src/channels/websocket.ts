@@ -18,8 +18,10 @@
 import * as crypto from "crypto";
 import { WebSocket } from "ws";
 import { config, userNamedSessionPath } from "../config";
+import { createProviderChain } from "../providers/index";
+import type { Message } from "../providers/index";
 import { runAgentLoop } from "../agent/loop";
-import { touchSession } from "../sessions/store";
+import { getSession, touchSession, updateSession } from "../sessions/store";
 import { handleCommand } from "./commands";
 import { bus, BusEventName, BusEvents } from "../events";
 import { setWsConnectionHandler } from "../gateway/server";
@@ -369,6 +371,13 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
         timestamp: Date.now(),
       });
 
+      // Auto-name session — if this is the first response and label is still default
+      if (sessionId) {
+        autoNameSession(client.userId, sessionId, text).catch((err) =>
+          console.error("[websocket] Auto-name failed:", err)
+        );
+      }
+
       if (result.compacted) {
         // Bus: notify observers that session history was compacted
         bus.emit("session_compacted", {
@@ -392,6 +401,34 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-name session — lightweight LLM call after first agent response
+// ---------------------------------------------------------------------------
+
+async function autoNameSession(
+  userId: string,
+  sessionId: string,
+  userMessage: string,
+): Promise<void> {
+  const entry = getSession(userId, sessionId);
+  if (!entry || entry.label !== "New Chat") return;
+
+  const provider = createProviderChain(entry.agentId);
+
+  const result = await provider.chat(
+    "You generate short titles. Given a user message, output a 4-8 word descriptive title. Reply with ONLY the title. No quotes, no punctuation at the end, no explanation.",
+    [{ role: "user", content: userMessage.slice(0, 500) }],
+    [],
+  );
+
+  if (result.type !== "text" || !result.text?.trim()) return;
+
+  const label = result.text!.trim().slice(0, 60);
+  updateSession(userId, sessionId, { label });
+  bus.emit("session_renamed", { sessionId, label, timestamp: Date.now() });
+  console.log(`[websocket] Auto-named session ${sessionId}: "${label}"`);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +462,7 @@ class WebSocketChannel implements Channel {
       "confirm_request",
       "schedule_run",
       "schedule_error",
+      "session_renamed",
     ];
     for (const eventName of eventNames) {
       bus.on(eventName, (payload) => broadcast(eventName, payload));

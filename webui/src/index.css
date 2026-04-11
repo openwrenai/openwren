@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "streamdown/styles.css";
+
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -73,12 +77,12 @@
     --chart-4: #4a4a4a;
     --chart-5: #333333;
     --radius: 0.625rem;
-    --sidebar: #f0f0f0;
+    --sidebar: #f5f5f5;
     --sidebar-foreground: #1a1a1a;
     --sidebar-primary: #1a1a1a;
     --sidebar-primary-foreground: #f5f5f5;
-    --sidebar-accent: #e5e5e5;
-    --sidebar-accent-foreground: #1a1a1a;
+    --sidebar-accent: #dbe4f3;
+    --sidebar-accent-foreground: #182338;
     --sidebar-border: #e0e0e0;
     --sidebar-ring: #a0a0a0;
 }
@@ -111,8 +115,8 @@
     --sidebar-foreground: #8a8a8a;
     --sidebar-primary: #5b7ff5;
     --sidebar-primary-foreground: #f5f5f5;
-    --sidebar-accent: #282a33;
-    --sidebar-accent-foreground: #dcdcdc;
+    --sidebar-accent: #1c2430;
+    --sidebar-accent-foreground: #b8ccd8;
     --sidebar-border: rgba(255, 255, 255, 0.06);
     --sidebar-ring: #7a7a7a;
 }
@@ -147,4 +151,32 @@
   *::-webkit-scrollbar-thumb:hover {
     background: oklch(1 0 0 / 12%);
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Streamdown code block overrides — single panel like Claude.ai
+   --------------------------------------------------------------------------- */
+
+/* Outer container — single border, no inner divide */
+[data-streamdown="code-block"] {
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden !important;
+}
+
+/* Kill ALL inner borders — header, body, dividers */
+[data-streamdown="code-block"] * {
+  border: none !important;
+}
+
+/* Hide download button */
+[data-streamdown="code-block-download-button"] {
+  display: none !important;
+}
+
+/* Code must preserve whitespace and newlines */
+[data-streamdown="code-block"] pre,
+[data-streamdown="code-block"] pre code {
+  white-space: pre !important;
+  overflow-x: auto !important;
 }

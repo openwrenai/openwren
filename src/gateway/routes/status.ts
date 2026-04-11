@@ -90,6 +90,7 @@ export async function registerStatusRoutes(app: FastifyInstance): Promise<void> 
       name: agent.name || id,
       model: agent.model ?? null,
       role: agent.role ?? null,
+        description: agent.description ?? null,
     }));
 
     return {

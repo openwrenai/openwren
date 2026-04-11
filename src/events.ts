@@ -209,6 +209,13 @@ export interface WorkflowCompletedEvent {
   timestamp: number;
 }
 
+/** A session was auto-renamed (e.g. after the first agent response). */
+export interface SessionRenamedEvent {
+  sessionId: string;
+  label: string;
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Event map — ties event names to their payload types for compile-time safety
 // ---------------------------------------------------------------------------
@@ -227,6 +234,7 @@ export interface BusEvents {
   task_completed: TaskCompletedEvent;
   task_failed: TaskFailedEvent;
   workflow_completed: WorkflowCompletedEvent;
+  session_renamed: SessionRenamedEvent;
   // Streaming events — registered here for type safety but NOT emitted via bus.emit().
   // They are sent directly to the requesting WS client via sendTo() in websocket.ts.
   token: TokenEvent;

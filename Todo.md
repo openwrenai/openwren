@@ -135,13 +135,74 @@ Theme & visual polish:
 - [x] Assistant message styling — removed bubble background (`bg-card`), softened text to `text-foreground/80`. Assistant text sits directly on page background like modern chat UIs.
 - [x] Custom scrollbars — thin (4px), near-invisible at rest (5% opacity), subtle on hover (12%). Replaces thick native browser scrollbar.
 
-Auto-naming sessions:
-- [ ] After agent's first response in a new session, make a lightweight LLM call to generate a 3-5 word session title. `PATCH /api/sessions/:id` with the generated label. Session starts as "New Chat", gets renamed automatically. Sidebar refreshes to show the new name.
+Markdown rendering & streaming:
+- [x] Streamdown integration — replaced raw `whitespace-pre-wrap` text with `<Streamdown>` component for proper markdown rendering (bold, lists, code blocks, tables). Historical messages render static, streaming text uses `animated isAnimating` props.
+- [x] Syntax highlighting — `@streamdown/code` plugin with Shiki (`github-dark` theme). Code blocks render with full syntax colors.
+- [x] Code block polish — CSS overrides to remove inner double border, hide download button, keep only copy-to-clipboard. Single-panel code blocks matching Claude.ai style.
+- [x] Smooth streaming — `smoothStream({ chunking: "word" })` added to AI SDK `streamText()` call. Tokens arrive word-by-word with 10ms delay instead of character-by-character, creating smoother reading experience.
 
-- [ ] Session header dropdown — clickable with Rename, Delete, Reset, Force compaction actions
+Chat layout:
+- [x] Message layout — both user and assistant messages left-aligned (no split layout). User messages have `bg-card` background, assistant messages transparent. Name labels ("You" / agent name) with colored accents (blue/emerald) and timestamps.
+- [x] Content width constraint — messages and input box centered at 60% width via `CHAT_WIDTH` toggle. Session header stays full-width. `ALIGN_MODE` toggle for easy switching between left-aligned and split layouts.
+- [x] Sidebar accent color — soft blue tint for active session highlight, adapted for both dark and light themes. Light/dark sidebar backgrounds unified with page background (no visible division).
+- [x] Agent picker hidden in active chat mode — agent name already shown in message labels and session header.
+- [x] Send button — `SendHorizonal` icon, bumped to `size-8`, uses `bg-accent` for theme-safe styling.
+
+Auto-naming sessions:
+- [x] Auto-name on first message — after agent's first response, a background LLM call generates a 4-8 word title from the user's message only (like Claude.ai). Uses same provider/model as the agent. One-shot guard (`label !== "New Chat"`) prevents re-naming. Non-blocking — chat is unaffected if naming fails.
+- [x] `SessionRenamedEvent` bus event — broadcast to all WS clients so sidebar and session header update in real-time without page reload.
+- [x] Sidebar live refresh — `ChatSidebar` listens for `message_out` (refetches session list to show new sessions) and `session_renamed` (updates label in-place). No more stale sidebar.
+- [x] WebUI-only — Telegram, Discord, and CLI channels are unaffected. Guard: `if (sessionId)` only fires for UUID-based WebUI sessions.
+
+- [x] Session header dropdown — clickable label with chevron, DropdownMenu with Rename and Delete. Rename opens modal with pre-filled input, saves via PATCH API. Delete opens confirmation modal, removes session from disk (sessions.json + JSONL file) via DELETE API, navigates to /chat.
+- [x] Sidebar session menu — ⋯ button appears on hover per session item, same Rename/Delete dropdown + modals. Sidebar and header stay in sync via DOM CustomEvents (`session-renamed`, `session-deleted`).
 - [ ] Read-only fallback — if gateway goes unreachable mid-session, show history but disable input instead of crashing
 - [ ] Session actions — reset session, force compaction, view archive list
 - [ ] Abort button — cancel agent processing mid-stream
+
+**Step 3.1 — Session Architecture Refactor**
+
+Scrap multi-session UUID approach. One session per agent, all channels share it. Chat becomes a regular dashboard page.
+
+Disk layout (new):
+```
+sessions/{userId}/{agentId}/
+  session.jsonl                          ← one session, all channels
+  archives/
+    session-2026-04-09_21-30-00.jsonl    ← compaction/clear/reset archives
+```
+
+Session picker displays: "Atlas Session", "Einstein Session".
+
+Backend:
+- [ ] `src/config.ts` — Add `agentSessionDir(userId, agentId)`, `agentSessionPath(userId, agentId)`, `agentSessionArchiveDir(userId, agentId)`. Remove `userSessionPath` (shared main.jsonl) and `userNamedSessionPath` (UUID sessions). Keep `userSessionDir`.
+- [ ] `src/agent/history.ts` — Fix `sessionDir`/`sessionPath` to use new config functions (agentId currently ignored via `_agentId`). Update `archiveAndWrite` to use `agentSessionArchiveDir`, name archives `session-{timestamp}.jsonl`.
+- [ ] `src/channels/websocket.ts` — Remove `autoNameSession()`, UUID session handling, `touchSession`/`getSession`/`updateSession` imports, `session_renamed` from broadcast list, `createProviderChain`/`Message` imports. Remove `sessionId` from WS message handling — client sends `{ type: "message", agentId, text }`. Remove `sessionOpts` — loop uses default path. Keep streaming callbacks in opts.
+- [ ] `src/channels/commands.ts` — Add `agentId` param to `handleCommand` and `handleNewSession`. Use `agentSessionPath`/`agentSessionArchiveDir` instead of `userSessionPath`/`userSessionArchiveDir`. Update all callers (websocket.ts, telegram.ts, discord.ts) to pass `agentId`.
+- [ ] `src/events.ts` — Remove `SessionRenamedEvent` interface and `session_renamed` from `BusEvents`.
+- [ ] `src/gateway/routes/sessions.ts` — Rewrite: `GET /api/sessions` scans `sessions/{userId}/*/session.jsonl`, returns agent list. `GET /api/sessions/:agentId/messages` for paginated history. `POST /api/sessions/:agentId/clear` archives + resets. Remove all UUID CRUD and `sessions/store` imports.
+- [ ] `src/workspace.ts` — Create `sessions/{userId}/{agentId}/` and `archives/` per configured agent on boot. Remove old flat `sessions/{userId}/archives/` creation.
+- [ ] `src/sessions/store.ts` — **Delete entirely**. No more UUID session index.
+- No changes needed: `telegram.ts`, `discord.ts`, `agent/loop.ts`, `scheduler/runner.ts`, `scratch.ts` — all use default `loadSession(userId, agentId)` which becomes correct after `history.ts` fix.
+
+Frontend:
+- [ ] **Delete**: `ChatLayout.tsx`, `ChatSidebar.tsx`, `routes/_chat.ts`, `routes/chatSession.ts` — all multi-session UI removed.
+- [ ] `webui/src/routes/chat.ts` — Re-parent from `chatLayout` to `dashboardLayout`. Path stays `/chat`.
+- [ ] `webui/src/routeTree.ts` — Remove chat layout + children. Add `chatRoute` under `dashboardLayout`.
+- [ ] `webui/src/components/layout/Sidebar.tsx` — Add "Chat" nav item (MessageSquare icon) to Control group.
+- [ ] `webui/src/pages/Chat.tsx` — Rewrite: remove lazy session creation, UUID params, rename/delete modals, `session_renamed` listener, `useNavigate`, ChatSidebar imports. Add session picker dropdown ("Atlas Session", "Einstein Session"). Load messages from `GET /api/sessions/:agentId/messages`. Send messages with just `agentId` (no sessionId). Add "Clear conversation" button → `POST /api/sessions/:agentId/clear`. Filter WS events by `agentId` instead of `sessionId`. Keep streaming, Streamdown markdown, tool cards, scroll-up pagination.
+- [ ] `webui/src/components/chat/ChatInput.tsx` — Remove `mode` prop (always active). Remove `AgentPicker` component (agent selected via session picker). Just textarea + send button.
+- [ ] `webui/src/lib/types.ts` — Remove: `SessionEntry`, `SessionListResponse`, `WsSessionRenamedEvent`, `sessionId` from `WsSendMessage`. Add new session list response type. Keep `SessionMessagesResponse`.
+
+Verification:
+- [ ] Backend + frontend typecheck pass
+- [ ] Chat with Atlas via WebUI → writes to `sessions/owner/atlas/session.jsonl`
+- [ ] Chat with Einstein via WebUI → writes to `sessions/owner/einstein/session.jsonl`
+- [ ] Telegram message to Atlas → writes to same `sessions/owner/atlas/session.jsonl`
+- [ ] `/reset` command → archives session, starts fresh
+- [ ] Clear conversation button → archives session, chat reloads empty
+- [ ] Session picker switches between agents, loads correct history
+- [ ] Compaction/idle reset/daily reset target correct per-agent file
 
 Agent Pause now and let user review progress so far...
 
