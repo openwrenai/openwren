@@ -175,34 +175,37 @@ sessions/{userId}/{agentId}/
 Session picker displays: "Atlas Session", "Einstein Session".
 
 Backend:
-- [ ] `src/config.ts` — Add `agentSessionDir(userId, agentId)`, `agentSessionPath(userId, agentId)`, `agentSessionArchiveDir(userId, agentId)`. Remove `userSessionPath` (shared main.jsonl) and `userNamedSessionPath` (UUID sessions). Keep `userSessionDir`.
-- [ ] `src/agent/history.ts` — Fix `sessionDir`/`sessionPath` to use new config functions (agentId currently ignored via `_agentId`). Update `archiveAndWrite` to use `agentSessionArchiveDir`, name archives `session-{timestamp}.jsonl`.
-- [ ] `src/channels/websocket.ts` — Remove `autoNameSession()`, UUID session handling, `touchSession`/`getSession`/`updateSession` imports, `session_renamed` from broadcast list, `createProviderChain`/`Message` imports. Remove `sessionId` from WS message handling — client sends `{ type: "message", agentId, text }`. Remove `sessionOpts` — loop uses default path. Keep streaming callbacks in opts.
-- [ ] `src/channels/commands.ts` — Add `agentId` param to `handleCommand` and `handleNewSession`. Use `agentSessionPath`/`agentSessionArchiveDir` instead of `userSessionPath`/`userSessionArchiveDir`. Update all callers (websocket.ts, telegram.ts, discord.ts) to pass `agentId`.
-- [ ] `src/events.ts` — Remove `SessionRenamedEvent` interface and `session_renamed` from `BusEvents`.
-- [ ] `src/gateway/routes/sessions.ts` — Rewrite: `GET /api/sessions` scans `sessions/{userId}/*/session.jsonl`, returns agent list. `GET /api/sessions/:agentId/messages` for paginated history. `POST /api/sessions/:agentId/clear` archives + resets. Remove all UUID CRUD and `sessions/store` imports.
-- [ ] `src/workspace.ts` — Create `sessions/{userId}/{agentId}/` and `archives/` per configured agent on boot. Remove old flat `sessions/{userId}/archives/` creation.
-- [ ] `src/sessions/store.ts` — **Delete entirely**. No more UUID session index.
+- [x] `src/config.ts` — Add `agentSessionDir(userId, agentId)`, `agentSessionPath(userId, agentId)`, `agentSessionArchiveDir(userId, agentId)`. Remove `userSessionPath` (shared main.jsonl) and `userNamedSessionPath` (UUID sessions). Keep `userSessionDir`.
+- [x] `src/agent/history.ts` — Fix `sessionDir`/`sessionPath` to use new config functions (agentId currently ignored via `_agentId`). Update `archiveAndWrite` to use `agentSessionArchiveDir`, name archives `session-{timestamp}.jsonl`.
+- [x] `src/channels/websocket.ts` — Remove `autoNameSession()`, UUID session handling, `touchSession`/`getSession`/`updateSession` imports, `session_renamed` from broadcast list, `createProviderChain`/`Message` imports. Remove `sessionId` from WS message handling — client sends `{ type: "message", agentId, text }`. Remove `sessionOpts` — loop uses default path. Keep streaming callbacks in opts.
+- [x] `src/channels/commands.ts` — Add `agentId` param to `handleCommand` and `handleNewSession`. Use `agentSessionPath`/`agentSessionArchiveDir` instead of `userSessionPath`/`userSessionArchiveDir`. Update all callers (websocket.ts, telegram.ts, discord.ts) to pass `agentId`.
+- [x] `src/events.ts` — Remove `SessionRenamedEvent` interface and `session_renamed` from `BusEvents`.
+- [x] `src/gateway/routes/sessions.ts` — Rewrite: `GET /api/sessions` scans `sessions/{userId}/*/session.jsonl`, returns agent list. `GET /api/sessions/:agentId/messages` for paginated history. `POST /api/sessions/:agentId/clear` archives + resets. Remove all UUID CRUD and `sessions/store` imports.
+- [x] `src/workspace.ts` — Create `sessions/{userId}/{agentId}/` and `archives/` per configured agent on boot. Remove old flat `sessions/{userId}/archives/` creation.
+- [x] `src/sessions/store.ts` — **Delete entirely**. No more UUID session index.
 - No changes needed: `telegram.ts`, `discord.ts`, `agent/loop.ts`, `scheduler/runner.ts`, `scratch.ts` — all use default `loadSession(userId, agentId)` which becomes correct after `history.ts` fix.
 
 Frontend:
-- [ ] **Delete**: `ChatLayout.tsx`, `ChatSidebar.tsx`, `routes/_chat.ts`, `routes/chatSession.ts` — all multi-session UI removed.
-- [ ] `webui/src/routes/chat.ts` — Re-parent from `chatLayout` to `dashboardLayout`. Path stays `/chat`.
-- [ ] `webui/src/routeTree.ts` — Remove chat layout + children. Add `chatRoute` under `dashboardLayout`.
-- [ ] `webui/src/components/layout/Sidebar.tsx` — Add "Chat" nav item (MessageSquare icon) to Control group.
-- [ ] `webui/src/pages/Chat.tsx` — Rewrite: remove lazy session creation, UUID params, rename/delete modals, `session_renamed` listener, `useNavigate`, ChatSidebar imports. Add session picker dropdown ("Atlas Session", "Einstein Session"). Load messages from `GET /api/sessions/:agentId/messages`. Send messages with just `agentId` (no sessionId). Add "Clear conversation" button → `POST /api/sessions/:agentId/clear`. Filter WS events by `agentId` instead of `sessionId`. Keep streaming, Streamdown markdown, tool cards, scroll-up pagination.
-- [ ] `webui/src/components/chat/ChatInput.tsx` — Remove `mode` prop (always active). Remove `AgentPicker` component (agent selected via session picker). Just textarea + send button.
-- [ ] `webui/src/lib/types.ts` — Remove: `SessionEntry`, `SessionListResponse`, `WsSessionRenamedEvent`, `sessionId` from `WsSendMessage`. Add new session list response type. Keep `SessionMessagesResponse`.
+- [x] **Delete**: `ChatLayout.tsx`, `ChatSidebar.tsx`, `routes/_chat.ts`, `routes/chatSession.ts` — all multi-session UI removed.
+- [x] `webui/src/routes/chat.ts` — Re-parent from `chatLayout` to `dashboardLayout`. Path stays `/chat`.
+- [x] `webui/src/routeTree.ts` — Remove chat layout + children. Add `chatRoute` under `dashboardLayout`.
+- [x] `webui/src/components/layout/Sidebar.tsx` — Add "Chat" nav item (MessageSquare icon) to Control group.
+- [x] `webui/src/pages/Chat.tsx` — Rewrite: remove lazy session creation, UUID params, rename/delete modals, `session_renamed` listener, `useNavigate`, ChatSidebar imports. Add session picker dropdown ("Atlas Session", "Einstein Session"). Load messages from `GET /api/sessions/:agentId/messages`. Send messages with just `agentId` (no sessionId). Add "Clear conversation" button → `POST /api/sessions/:agentId/clear`. Filter WS events by `agentId` instead of `sessionId`. Keep streaming, Streamdown markdown, tool cards, scroll-up pagination.
+- [x] `webui/src/components/chat/ChatInput.tsx` — Remove `mode` prop (always active). Remove `AgentPicker` component (agent selected via session picker). Just textarea + send button.
+- [x] `webui/src/lib/types.ts` — Remove: `SessionEntry`, `SessionListResponse`, `WsSessionRenamedEvent`, `sessionId` from `WsSendMessage`. Add new session list response type. Keep `SessionMessagesResponse`.
 
 Verification:
-- [ ] Backend + frontend typecheck pass
-- [ ] Chat with Atlas via WebUI → writes to `sessions/owner/atlas/session.jsonl`
+- [x] Backend + frontend typecheck pass
+- [x] Chat with Atlas via WebUI → writes to `sessions/owner/atlas/session.jsonl`
 - [ ] Chat with Einstein via WebUI → writes to `sessions/owner/einstein/session.jsonl`
-- [ ] Telegram message to Atlas → writes to same `sessions/owner/atlas/session.jsonl`
+- [x] Telegram message to Atlas → writes to same `sessions/owner/atlas/session.jsonl`
 - [ ] `/reset` command → archives session, starts fresh
-- [ ] Clear conversation button → archives session, chat reloads empty
-- [ ] Session picker switches between agents, loads correct history
+- [x] Clear conversation button → archives session, chat reloads empty
+- [x] Session picker switches between agents, loads correct history
 - [ ] Compaction/idle reset/daily reset target correct per-agent file
+
+Cross-channel visibility:
+- [ ] `webui/src/pages/Chat.tsx` — Add `message_in` handler in WS subscribe callback. When a `message_in` event arrives from a non-websocket channel (Telegram, Discord), inject it into the chat as a user message. Guard with `channel === "websocket"` skip to avoid duplicating messages already added optimistically by the WebUI sender. This makes Telegram/Discord user messages appear in WebUI in real-time.
 
 Agent Pause now and let user review progress so far...
 

@@ -168,7 +168,7 @@ function setupBot(bot: Bot, agentId: string, agentConfig: AgentConfig): void {
     }
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, userId);
+    const commandResponse = handleCommand(text, userId, agentId);
     if (commandResponse !== null) {
       await ctx.reply(commandResponse);
       return;

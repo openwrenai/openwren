@@ -1,6 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Home,
+  MessageSquare,
   Bot,
   Users,
   GitBranch,
@@ -32,6 +33,7 @@ const navGroups: NavGroup[] = [
     title: "Control",
     items: [
       { label: "Dashboard", path: "/", icon: Home },
+      { label: "Chat", path: "/chat", icon: MessageSquare },
       { label: "Workflows", path: "/workflows", icon: GitBranch },
       { label: "Schedules", path: "/schedules", icon: Clock },
       { label: "Approvals", path: "/approvals", icon: ShieldCheck },

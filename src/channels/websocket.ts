@@ -17,11 +17,8 @@
 
 import * as crypto from "crypto";
 import { WebSocket } from "ws";
-import { config, userNamedSessionPath } from "../config";
-import { createProviderChain } from "../providers/index";
-import type { Message } from "../providers/index";
+import { config } from "../config";
 import { runAgentLoop } from "../agent/loop";
-import { getSession, touchSession, updateSession } from "../sessions/store";
 import { handleCommand } from "./commands";
 import { bus, BusEventName, BusEvents } from "../events";
 import { setWsConnectionHandler } from "../gateway/server";
@@ -36,7 +33,6 @@ interface WsSendMessage {
   type: "message";
   agentId: string;     // which agent to talk to (e.g. "atlas")
   text: string;        // the user's message
-  sessionId?: string;  // UUID session ID for WebUI sessions. Omit or "main" for default channel session.
 }
 
 /** Reply to a tool confirmation prompt (shell command approval). */
@@ -216,7 +212,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     const text = msg.text.trim();
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, client.userId);
+    const commandResponse = handleCommand(text, client.userId, agentId);
     if (commandResponse !== null) {
       sendTo(client, "message", { agentId, text: commandResponse });
       return;
@@ -224,19 +220,13 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
 
     console.log(`[websocket] ${agentConfig.name} ← ${client.userId}: ${text.slice(0, 120)}${text.length > 120 ? "..." : ""}`);
 
-    // Resolve session ID early — needed for bus events and session file routing.
-    // UUID sessions (from WebUI) use a custom file, otherwise default (main.jsonl).
-    const sessionId = msg.sessionId && msg.sessionId !== "main" ? msg.sessionId : undefined;
-
-    // Bus: notify observers that a message arrived (sessionId included so
-    // the frontend can filter events to the active session)
+    // Bus: notify observers that a message arrived
     bus.emit("message_in", {
       channel: "websocket",
       userId: client.userId,
       agentId,
       agentName: agentConfig.name,
       text,
-      sessionId,
       timestamp: Date.now(),
     });
 
@@ -246,7 +236,6 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       userId: client.userId,
       agentId,
       agentName: agentConfig.name,
-      sessionId,
       timestamp: Date.now(),
     });
 
@@ -268,38 +257,21 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       });
     };
 
-    // Resolve session file path from the sessionId declared above
-    const sessionOpts = sessionId
-      ? { sessionFile: userNamedSessionPath(client.userId, sessionId) }
-      : {};
+    // Streaming timestamp buffer
+    // The model sometimes echoes back injected timestamps (e.g. "[Apr 8, 02:49]")
+    // at the start of its response. We buffer the first ~18 chars to detect and
+    // strip them before they reach the frontend. Once the check is done, all
+    // subsequent deltas pass through with zero overhead.
+    let streamBuffer = "";
+    let bufferFlushed = false;
+    const TIMESTAMP_RE = /\[(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{2}:\d{2}\]\s*/g;
 
-    // Touch session updatedAt so session list stays sorted by recency
-    if (sessionId) {
-      touchSession(client.userId, sessionId);
-    }
-
-    // ---- Streaming timestamp buffer ----
-      // The model sometimes echoes back injected timestamps (e.g. "[Apr 8, 02:49]")
-      // at the start of its response. We buffer the first ~18 chars to detect and
-      // strip them before they reach the frontend. Once the check is done, all
-      // subsequent deltas pass through with zero overhead.
-      let streamBuffer = "";
-      let bufferFlushed = false;
-      const TIMESTAMP_RE = /\[(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{2}:\d{2}\]\s*/g;
-
-      try {
+    try {
         const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
-        ...sessionOpts,
-        usageContext: { source: "chat", userId: client.userId, sessionId: sessionId ?? "main" },
-        // ---- Streaming callbacks ----
-        // These send events directly to THIS client via sendTo(), NOT through
-        // the bus. This is intentional — token events are high-frequency and
-        // should only go to the client that sent the message, not broadcast
-        // to all connected clients.
-        streamCallback: (delta) => {
-            if (bufferFlushed) {
-              // Past the initial check — passthrough, zero overhead
-            sendTo(client, "token", { text: delta, sessionId });
+          usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
+          streamCallback: (delta) => {
+          if (bufferFlushed) {
+              sendTo(client, "token", { text: delta, agentId });
             return;
             }
 
@@ -308,7 +280,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
           // No leading bracket — no timestamp possible, flush immediately
           if (!streamBuffer.startsWith("[")) {
               bufferFlushed = true;
-            sendTo(client, "token", { text: streamBuffer, sessionId });
+            sendTo(client, "token", { text: streamBuffer, agentId });
             return;
             }
 
@@ -320,7 +292,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
           bufferFlushed = true;
           const cleaned = streamBuffer.replace(TIMESTAMP_RE, "");
           if (cleaned) {
-              sendTo(client, "token", { text: cleaned, sessionId });
+              sendTo(client, "token", { text: cleaned, agentId });
             }
           },
           // Emits tool_use so the frontend can show inline tool call cards
@@ -332,7 +304,6 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
               toolCallId,
               toolName,
               args,
-              sessionId,
               timestamp: Date.now(),
             });
           },
@@ -347,7 +318,6 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
               toolCallId,
               toolName,
               result: result.slice(0, 500),
-              sessionId,
               timestamp: Date.now(),
             });
           },
@@ -356,80 +326,38 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
         `[websocket] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
       );
 
-      // Bus: broadcast the agent's response to WS observers.
-      // sessionId is included so the frontend can filter events to the
-        // active session and ignore responses from other sessions/channels.
-        bus.emit("message_out", {
-        channel: "websocket",
+      bus.emit("message_out", {
+          channel: "websocket",
         userId: client.userId,
         agentId,
         agentName: agentConfig.name,
         text: result.text,
         compacted: result.compacted,
-          nearThreshold: result.nearThreshold,
-        sessionId,
+        nearThreshold: result.nearThreshold,
         timestamp: Date.now(),
-      });
+        });
 
-      // Auto-name session — if this is the first response and label is still default
-      if (sessionId) {
-        autoNameSession(client.userId, sessionId, text).catch((err) =>
-          console.error("[websocket] Auto-name failed:", err)
-        );
-      }
-
-      if (result.compacted) {
-        // Bus: notify observers that session history was compacted
+        if (result.compacted) {
         bus.emit("session_compacted", {
-          userId: client.userId,
+            userId: client.userId,
           agentId,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+      console.error("[websocket] Error running agent loop:", err);
+      bus.emit("agent_error", {
+          channel: "websocket",
+        userId: client.userId,
+        agentId,
+          agentName: agentConfig.name,
+          error,
           timestamp: Date.now(),
         });
       }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      console.error("[websocket] Error running agent loop:", err);
-      // Bus: notify observers that the agent loop failed
-      bus.emit("agent_error", {
-        channel: "websocket",
-        userId: client.userId,
-        agentId,
-        agentName: agentConfig.name,
-        error,
-        sessionId,
-          timestamp: Date.now(),
-      });
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Auto-name session — lightweight LLM call after first agent response
-// ---------------------------------------------------------------------------
-
-async function autoNameSession(
-  userId: string,
-  sessionId: string,
-  userMessage: string,
-): Promise<void> {
-  const entry = getSession(userId, sessionId);
-  if (!entry || entry.label !== "New Chat") return;
-
-  const provider = createProviderChain(entry.agentId);
-
-  const result = await provider.chat(
-    "You generate short titles. Given a user message, output a 4-8 word descriptive title. Reply with ONLY the title. No quotes, no punctuation at the end, no explanation.",
-    [{ role: "user", content: userMessage.slice(0, 500) }],
-    [],
-  );
-
-  if (result.type !== "text" || !result.text?.trim()) return;
-
-  const label = result.text!.trim().slice(0, 60);
-  updateSession(userId, sessionId, { label });
-  bus.emit("session_renamed", { sessionId, label, timestamp: Date.now() });
-  console.log(`[websocket] Auto-named session ${sessionId}: "${label}"`);
-}
 
 // ---------------------------------------------------------------------------
 // WebSocketChannel
@@ -462,8 +390,7 @@ class WebSocketChannel implements Channel {
       "confirm_request",
       "schedule_run",
       "schedule_error",
-      "session_renamed",
-    ];
+      ];
     for (const eventName of eventNames) {
       bus.on(eventName, (payload) => broadcast(eventName, payload));
     }

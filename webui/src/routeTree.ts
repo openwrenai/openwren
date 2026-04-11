@@ -1,9 +1,7 @@
 import { rootRoute } from "./routes/__root.ts";
 import { dashboardLayout } from "./routes/_dashboard.ts";
-import { chatLayout } from "./routes/_chat.ts";
 import { indexRoute } from "./routes/index.ts";
 import { chatRoute } from "./routes/chat.ts";
-import { chatSessionRoute } from "./routes/chatSession.ts";
 import { agentsRoute } from "./routes/agents.ts";
 import { teamsRoute } from "./routes/teams.ts";
 import { workflowsRoute } from "./routes/workflows.ts";
@@ -18,6 +16,7 @@ import { approvalsRoute } from "./routes/approvals.ts";
 export const routeTree = rootRoute.addChildren([
   dashboardLayout.addChildren([
     indexRoute,
+    chatRoute,
     agentsRoute,
     teamsRoute,
     workflowsRoute,
@@ -28,9 +27,5 @@ export const routeTree = rootRoute.addChildren([
     usageRoute,
     logsRoute,
     approvalsRoute,
-  ]),
-  chatLayout.addChildren([
-    chatRoute,
-    chatSessionRoute,
   ]),
 ]);

@@ -54,22 +54,8 @@ export interface ScheduleListResponse {
 
 // --- Sessions ---
 
-export interface SessionEntry {
-  id: string;
-  agentId: string;
-  label: string;
-  source: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface SessionListResponse {
-  sessions: SessionEntry[];
-}
-
 /**
- * Response from GET /api/sessions/:id/messages — paginated session history.
- * Messages are pre-transformed by the backend into ChatItem-compatible shape.
+ * Response from GET /api/sessions/:agentId/messages — paginated session history.
  */
 export interface SessionMessagesResponse {
   messages: Array<{
@@ -82,47 +68,24 @@ export interface SessionMessagesResponse {
     result?: string;
     timestamp: number;
   }>;
-  total: number;  // total message count in session — for pagination awareness
+  total: number;
 }
 
-export interface SessionMessage {
-  role: "user" | "assistant" | "tool";
-  content: string | MessageContent[];
-  ts?: number;
-}
-
-export interface MessageContent {
-  type: "text" | "tool-call" | "tool-result";
-  text?: string;
-  toolCallId?: string;
-  toolName?: string;
-  args?: Record<string, unknown>;
-  result?: unknown;
-}
-
-// --- WebSocket messages (client → server) ---
+// --- WebSocket messages (client -> server) ---
 
 export interface WsSendMessage {
   type: "message";
   agentId: string;
-  sessionId?: string;
   text: string;
 }
 
-// --- WebSocket messages (server → client) ---
-//
-// Event delivery:
-//   - token, tool_use, tool_result: sent DIRECTLY to the requesting client
-//     via sendTo() in websocket.ts. High-frequency, not broadcast.
-//   - message_in, message_out, agent_typing, agent_error: BROADCAST to all
-//     connected clients via the bus. System-wide visibility.
+// --- WebSocket messages (server -> client) ---
 
-/** A single text delta from the streaming LLM response. */
 export interface WsTokenEvent {
   type: "token";
   payload: {
     text: string;
-    sessionId?: string;  // WebUI session UUID — filter on this to avoid cross-session leaks
+    agentId?: string;
   };
 }
 
@@ -133,7 +96,6 @@ export interface WsMessageOutEvent {
     agentName: string;
     text: string;
     compacted?: boolean;
-    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
     timestamp: number;
   };
 }
@@ -143,7 +105,6 @@ export interface WsAgentTypingEvent {
   payload: {
     agentId: string;
     agentName: string;
-    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
     timestamp: number;
   };
 }
@@ -159,53 +120,42 @@ export interface WsAgentErrorEvent {
     agentId: string;
     agentName: string;
     error: string;
-    sessionId?: string;  // WebUI session UUID — absent for Telegram/Discord events
     timestamp: number;
   };
 }
 
-/** Emitted when a session is auto-renamed after the first agent response. */
-export interface WsSessionRenamedEvent {
-  type: "session_renamed";
-  payload: {
-    sessionId: string;
-    label: string;
-    timestamp: number;
-  };
-}
-
-/**
- * Received when the agent starts executing a tool call.
- * Frontend renders a ToolCallCard with a spinner.
- */
 export interface WsToolUseEvent {
   type: "tool_use";
   payload: {
     agentId: string;
     agentName: string;
-    toolCallId: string;   // used to match with the corresponding WsToolResultEvent
+    toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
-    sessionId?: string;   // WebUI session UUID — filter on this
     timestamp: number;
   };
 }
 
-/**
- * Received when a tool finishes executing.
- * Frontend updates the matching ToolCallCard (by toolCallId) with the result
- * and swaps the spinner for a checkmark. Result is truncated to 500 chars
- * by the backend to avoid flooding the WebSocket.
- */
 export interface WsToolResultEvent {
   type: "tool_result";
   payload: {
     agentId: string;
     agentName: string;
-    toolCallId: string;   // matches WsToolUseEvent.toolCallId
+    toolCallId: string;
     toolName: string;
-    result: string;       // truncated to 500 chars by websocket.ts
-    sessionId?: string;   // WebUI session UUID — filter on this
+    result: string;
+    timestamp: number;
+  };
+}
+
+export interface WsMessageInEvent {
+  type: "message_in";
+  payload: {
+    channel: string;
+    userId: string;
+    agentId: string;
+    agentName: string;
+    text: string;
     timestamp: number;
   };
 }
@@ -213,9 +163,9 @@ export interface WsToolResultEvent {
 export type WsServerEvent =
   | WsTokenEvent
   | WsMessageOutEvent
+  | WsMessageInEvent
   | WsAgentTypingEvent
   | WsErrorEvent
   | WsAgentErrorEvent
   | WsToolUseEvent
-  | WsToolResultEvent
-  | WsSessionRenamedEvent;
+  | WsToolResultEvent;
