@@ -106,7 +106,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
 
     const lines = raw.split("\n");
-    const allMessages: Array<{ timestamp: number; role: string; content: unknown }> = [];
+    const allMessages: Array<{ timestamp: number; role: string; content: unknown; channel?: string; isolated?: boolean }> = [];
     for (const line of lines) {
       try {
         allMessages.push(JSON.parse(line));
@@ -134,6 +134,8 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       args?: Record<string, unknown>;
       result?: string;
       timestamp: number;
+        channel?: string;
+      isolated?: boolean;
     }
 
     const items: ChatItemResponse[] = [];
@@ -148,6 +150,8 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           role: msg.role as "user" | "assistant",
           text: content.replace(TIMESTAMP_RE, ""),
           timestamp: msg.timestamp,
+            ...(msg.channel ? { channel: msg.channel } : {}),
+          ...(msg.isolated ? { isolated: true } : {}),
         });
       } else if (Array.isArray(content)) {
         for (const block of content) {
@@ -175,6 +179,8 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
               role: msg.role as "user" | "assistant",
               text: (block.text ?? "").replace(TIMESTAMP_RE, ""),
               timestamp: msg.timestamp,
+                ...(msg.channel ? { channel: msg.channel } : {}),
+              ...(msg.isolated ? { isolated: true } : {}),
             });
           }
         }

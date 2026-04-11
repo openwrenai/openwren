@@ -25,6 +25,19 @@ import { Button } from "@/components/ui/button.tsx";
 import type { SessionMessagesResponse, WsServerEvent } from "@/lib/types.ts";
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Extract job label from scheduler message content like "[Daily Digest] ..." or "[job:id] ..." */
+function parseJobLabel(text: string): { label: string; body: string } | null {
+  const m = text.match(/^\[([^\]]+)\]\s*/);
+  if (!m) return null;
+  const raw = m[1];
+  const label = raw.startsWith("job:") ? raw.slice(4) : raw;
+  return { label, body: text.slice(m[0].length) };
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -39,6 +52,8 @@ interface TextItem {
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
+  channel?: string;
+  isolated?: boolean;
 }
 
 interface ToolCallItem {
@@ -168,6 +183,8 @@ export function Chat() {
               role: m.role as "user" | "assistant",
               text: m.text ?? "",
               timestamp: m.timestamp,
+                ...(m.channel ? { channel: m.channel } : {}),
+              ...(m.isolated ? { isolated: true } : {}),
             };
           });
           setItems(loaded);
@@ -194,6 +211,7 @@ export function Chat() {
             role: "user",
             text: event.payload.text,
             timestamp: event.payload.timestamp,
+              channel: event.payload.channel,
           }]);
         }
 
@@ -254,6 +272,7 @@ export function Chat() {
             role: "assistant",
             text,
             timestamp: event.payload.timestamp,
+              ...(event.payload.channel && event.payload.channel !== "websocket" ? { channel: event.payload.channel } : {}),
           }]);
         }
       }
@@ -318,6 +337,8 @@ export function Chat() {
                 role: m.role as "user" | "assistant",
                 text: m.text ?? "",
                 timestamp: m.timestamp,
+                  ...(m.channel ? { channel: m.channel } : {}),
+                ...(m.isolated ? { isolated: true } : {}),
               };
             });
             setItems((prev) => [...older, ...prev]);
@@ -405,36 +426,68 @@ export function Chat() {
 
       {/* Messages */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto py-4 space-y-1">
-        <div className={cn(CHAT_WIDTH, "mx-auto")}>
-          {items.map((item, i) =>
-            item.kind === "tool_call" ? (
-              <ToolCallCard key={`tc-${item.toolCallId}`} item={item} />
-            ) : (
+        <div className={cn(CHAT_WIDTH, "mx-auto space-y-2")}>
+          {items.map((item, i) => {
+            // Hide scheduler prompts — only show the agent's response
+              if (item.kind === "text" && item.role === "user" && item.channel === "scheduler") {
+                return null;
+              }
+
+              if (item.kind === "tool_call") {
+              return <ToolCallCard key={`tc-${item.toolCallId}`} item={item} />;
+              }
+
+              const jobInfo = item.channel === "scheduler" ? parseJobLabel(item.text) : null;
+              const displayText = jobInfo ? jobInfo.body : item.text;
+
+              const displayName = item.role === "user" ? "You" : agentDisplayName;
+
+              return (
               <div key={i}>
-                <div
-                  className={cn(
-                    "rounded-lg px-6 py-[25px] text-sm",
-                    item.role === "user" ? "bg-card" : "text-foreground/80",
-                  )}
-                >
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span className={cn(
-                      "text-sm font-semibold",
-                      item.role === "user" ? "text-blue-400" : "text-emerald-400",
-                    )}>
-                      {item.role === "user" ? "You" : agentDisplayName}
-                    </span>
-                    {item.timestamp && (
-                      <span className="text-[11px] text-muted-foreground/40">
-                        {formatTime(item.timestamp)}
-                      </span>
+                  <div
+                    className={cn(
+                      "rounded-lg px-6 py-[25px] text-sm",
+                      !item.isolated && "ring-1 ring-foreground/10 dark:ring-muted-foreground/20",
+                      item.channel === "scheduler" && !item.isolated ? "bg-card/30 opacity-80" : item.isolated ? "bg-card/20" : "bg-card/50",
+                      item.isolated && "border border-dashed border-muted-foreground/40",
                     )}
+                >
+                    <div className="flex items-baseline justify-between mb-1">
+                      <div className="flex items-baseline gap-2">
+                        {item.channel === "scheduler" && jobInfo ? (
+                        <span className="text-sm font-semibold text-emerald-400">{agentDisplayName}</span>
+                        ) : (
+                          <span className={cn(
+                            "text-sm font-semibold",
+                            item.role === "user" ? "text-blue-400" : "text-emerald-400",
+                          )}>
+                            {displayName}
+                          </span>
+                        )}
+                        {item.timestamp && (
+                          <span className="text-[11px] text-muted-foreground/40">
+                            {formatTime(item.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                      {item.channel === "scheduler" ? (
+                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">
+                          Scheduled Job
+                        </span>
+                      ) : item.role === "user" && item.channel && item.channel !== "webui" ? (
+                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
+                        via {item.channel.charAt(0).toUpperCase() + item.channel.slice(1)}
+                      </span>
+                      ) : null}
+                    </div>
+                    {item.channel === "scheduler" && jobInfo && (
+                      <div className="text-[13px] font-semibold mb-2">[{jobInfo.label}]</div>
+                    )}
+                    <Streamdown plugins={{ code }}>{displayText}</Streamdown>
                   </div>
-                  <Streamdown plugins={{ code }}>{item.text}</Streamdown>
                 </div>
-              </div>
-            )
-          )}
+              );
+            })}
 
           {/* Streaming */}
           {streamingText && (

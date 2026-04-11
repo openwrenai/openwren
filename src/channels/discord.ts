@@ -119,7 +119,8 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     // non-blocking pattern as Telegram keeps the confirmation flow consistent
     // and avoids any risk of handler backpressure blocking confirmation replies.
     runAgentLoop(userId, agentId, agentConfig, text, confirm, false, {
-      usageContext: { source: "chat", userId, sessionId: "main" },
+      channel: "discord",
+        usageContext: { source: "chat", userId, sessionId: "main" },
     })
       .then(async (result) => {
         console.log(

@@ -67,6 +67,8 @@ export interface SessionMessagesResponse {
     args?: Record<string, unknown>;
     result?: string;
     timestamp: number;
+    channel?: string;
+    isolated?: boolean;
   }>;
   total: number;
 }
@@ -96,6 +98,7 @@ export interface WsMessageOutEvent {
     agentName: string;
     text: string;
     compacted?: boolean;
+    channel?: string;
     timestamp: number;
   };
 }

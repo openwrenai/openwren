@@ -268,6 +268,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
 
     try {
         const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
+          channel: "webui",
           usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
           streamCallback: (delta) => {
           if (bufferFlushed) {

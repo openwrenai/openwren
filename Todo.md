@@ -205,7 +205,30 @@ Verification:
 - [ ] Compaction/idle reset/daily reset target correct per-agent file
 
 Cross-channel visibility:
-- [ ] `webui/src/pages/Chat.tsx` — Add `message_in` handler in WS subscribe callback. When a `message_in` event arrives from a non-websocket channel (Telegram, Discord), inject it into the chat as a user message. Guard with `channel === "websocket"` skip to avoid duplicating messages already added optimistically by the WebUI sender. This makes Telegram/Discord user messages appear in WebUI in real-time.
+- [x] `webui/src/pages/Chat.tsx` — Add `message_in` handler in WS subscribe callback. When a `message_in` event arrives from a non-websocket channel (Telegram, Discord), inject it into the chat as a user message. Guard with `channel === "websocket"` skip to avoid duplicating messages already added optimistically by the WebUI sender. This makes Telegram/Discord user messages appear in WebUI in real-time.
+- [x] `webui/src/lib/types.ts` — Add `WsMessageInEvent` interface to `WsServerEvent` union so TypeScript recognizes `message_in` events.
+
+Channel origin tracking:
+- [x] `src/providers/index.ts` — Add optional `channel?: string` and `isolated?: boolean` to `Message` interface. `channel` tracks origin (webui, telegram, discord, scheduler). `isolated` marks display-only messages that the LLM should never see.
+- [x] `src/agent/loop.ts` — Add `channel?: string` to `RunLoopOptions`. When constructing the user message, attach `channel` from opts.
+- [x] `src/agent/history.ts` — When loading messages for the LLM (`loadSession`), filter out messages where `isolated: true`. They exist in the JSONL for display but are invisible to the agent.
+- [x] `src/channels/websocket.ts` — Pass `channel: "webui"` in `runAgentLoop` opts.
+- [x] `src/channels/telegram.ts` — Pass `channel: "telegram"` in `runAgentLoop` opts.
+- [x] `src/channels/discord.ts` — Pass `channel: "discord"` in `runAgentLoop` opts.
+- [x] `src/scheduler/runner.ts` — Non-isolated jobs: pass `channel: "scheduler"` in `runAgentLoop` opts (messages already land in main `session.jsonl` via shared session). Isolated jobs: after `runAgentLoop` completes, append both the job prompt (role: "user") and agent response (role: "assistant") to the main `session.jsonl` with `isolated: true` and `channel: "scheduler"`. This is **in addition to** `deliverMessage(job.channel)` which pushes the response to the configured channel (Telegram, Discord, etc.). WebUI gets visibility two ways: persisted in `session.jsonl` (survives reload) and via bus event (live updates). The `deliverMessage` push and `session.jsonl` persistence serve different purposes — push delivers to the user's configured channel, persistence gives WebUI a complete conversation timeline.
+- [x] `src/gateway/routes/sessions.ts` — Include `channel` and `isolated` fields in message API response.
+- [x] `webui/src/lib/types.ts` — Add `channel?: string` and `isolated?: boolean` to `SessionMessagesResponse` message items. Add `channel?: string` to `WsMessageOutEvent`.
+- [x] `webui/src/pages/Chat.tsx` — Store `channel` and `isolated` on `TextItem`. Show "via Telegram" / "via Discord" / "via Scheduler" badge on messages where channel is not webui/undefined. For isolated messages, show additional visual hint (dimmed opacity + dashed border) so user understands Atlas won't remember this if they reply.
+
+Isolated job timestamp fix:
+- [x] `src/agent/history.ts` — Add optional `timestamp` parameter to `appendMessage`. When provided, uses it instead of `Date.now()`. All existing callers unaffected (parameter is optional).
+- [x] `src/scheduler/runner.ts` — Pass `startMs` as timestamp for isolated job prompt copy. Response copy uses `Date.now()` (correct — it's when the job finished). Ensures WebUI displays the actual job execution time, not when the copy happened.
+
+Chat bubble polish:
+- [x] "via Channel" badge — purple neon pill (`bg-purple-500/10 text-purple-400`), right-aligned in message header.
+- [x] Job label — scheduler user messages show "Job: {name}" in amber (`text-amber-400`) instead of "You". Job name extracted from `[prefix]` in content, prefix stripped from displayed text.
+- [x] Isolated card merge — isolated job prompt + response merged into single card. Prompt shown as muted sub-line (`text-xs`), response rendered below with Streamdown. Prevents two dashed-border cards glued together.
+- [x] Non-isolated scheduler assistant messages — show agent name (Atlas) instead of "Job: {name}". The `[prefix]` is still stripped from displayed text. Only `role === "user"` scheduler messages get the "Job:" label.
 
 Agent Pause now and let user review progress so far...
 

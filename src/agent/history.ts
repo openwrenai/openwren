@@ -56,11 +56,13 @@ export function loadSession(userId: string, agentId: string): TimestampedMessage
     try {
       const parsed = JSON.parse(trimmed);
       if (parsed.role && parsed.content !== undefined) {
-        messages.push(parsed as TimestampedMessage);
-      }
-    } catch {
+        // Skip display-only messages — rendered in WebUI but invisible to the LLM
+          if (parsed.isolated) continue;
+          messages.push(parsed as TimestampedMessage);
+        }
+      } catch {
       // Malformed line — skip silently (handles partial writes on crash)
-    }
+      }
   }
 
   return messages;
@@ -73,16 +75,18 @@ export function loadSession(userId: string, agentId: string): TimestampedMessage
 /**
  * Appends a single message to the active session file.
  * Automatically adds a UTC timestamp (milliseconds) to every message.
+ * Optionally accepts a timestamp override (e.g. for isolated job persistence
+ * where the actual execution time differs from when the copy happens).
  * Ensures the session directory exists before writing.
  */
-export function appendMessage(userId: string, agentId: string, message: Message): void {
+export function appendMessage(userId: string, agentId: string, message: Message, timestamp?: number): void {
   const dir = sessionDir(userId, agentId);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
   const timestamped: TimestampedMessage = {
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
     ...message,
   };
   const line = JSON.stringify(timestamped) + "\n";

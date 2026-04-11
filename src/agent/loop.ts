@@ -80,6 +80,8 @@ export interface TaskContext {
 export interface RunLoopOptions {
   /** Override session file path (for isolated job sessions). */
   sessionFile?: string;
+  /** Origin channel — stored on user messages for display (webui, telegram, discord, scheduler). */
+  channel?: string;
   /** Skip idle/daily resets and compaction (for job sessions). */
   skipMaintenance?: boolean;
   /** Prefix to prepend to stored assistant response (not returned in LoopResult.text). */
@@ -211,7 +213,12 @@ export async function runAgentLoop(
       };
     }
 
-    const userMsg: TimestampedMessage = { timestamp: Date.now(), role: "user", content: userMessage };
+    const userMsg: TimestampedMessage = {
+      timestamp: Date.now(),
+      role: "user",
+      content: userMessage,
+      ...(opts?.channel ? { channel: opts.channel } : {}),
+    };
     messages.push(userMsg);
     append(userMsg);
 

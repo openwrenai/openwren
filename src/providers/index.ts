@@ -10,6 +10,10 @@ import type { AiSdkCreds } from "./ai-sdk";
 export interface Message {
   role: "user" | "assistant" | "tool";
   content: string | MessageContent[];
+  /** Origin channel (webui, telegram, discord, scheduler). Absent = webui. */
+  channel?: string;
+  /** Display-only message — rendered in WebUI but filtered out before sending to the LLM. */
+  isolated?: boolean;
 }
 
 /** A structured content block inside a message — can be text, a tool call, or a tool result.
