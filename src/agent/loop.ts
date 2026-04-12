@@ -381,6 +381,7 @@ export async function runAgentLoop(
             timestamp: Date.now(),
           role: "assistant",
           content: storedText,
+          ...(opts?.channel === "scheduler" ? { channel: "scheduler" } : {}),
           };
         messages.push(assistantMsg);
         append(assistantMsg);
@@ -425,6 +426,7 @@ export async function runAgentLoop(
           timestamp: Date.now(),
           role: "assistant",
           content: storedText,
+          ...(opts?.channel === "scheduler" ? { channel: "scheduler" } : {}),
         };
         messages.push(assistantMsg);
         append(assistantMsg);

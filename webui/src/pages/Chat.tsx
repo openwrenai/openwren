@@ -385,10 +385,11 @@ export function Chat() {
     return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   };
 
-  const CHAT_WIDTH = "w-[60%]";
+  const CHAT_WIDTH = "w-full px-4 md:px-0 md:w-[90%] lg:w-[80%] xl:w-[70%] max-w-4xl";
+  const ALIGN_MODE = "left";      // "left" = both left-aligned | "split" = user right, assistant left
 
   return (
-    <div className="flex flex-col h-full -m-8">
+    <div className="flex flex-col h-[calc(100%+4rem)] -m-8">
       {/* Header — session picker + clear button */}
       <div className="px-6 py-3 shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -443,10 +444,13 @@ export function Chat() {
               const displayName = item.role === "user" ? "You" : agentDisplayName;
 
               return (
-              <div key={i}>
+              <div key={i} className={cn(
+                  ALIGN_MODE === "split" && (item.role === "user" ? "flex justify-end" : "flex justify-start"),
+                )}>
                   <div
                     className={cn(
                       "rounded-lg px-6 py-[25px] text-sm",
+                      ALIGN_MODE === "split" && "max-w-[70%]",
                       !item.isolated && "ring-1 ring-foreground/10 dark:ring-muted-foreground/20",
                       item.channel === "scheduler" && !item.isolated ? "bg-card/30 opacity-80" : item.isolated ? "bg-card/20" : "bg-card/50",
                       item.isolated && "border border-dashed border-muted-foreground/40",
@@ -454,7 +458,7 @@ export function Chat() {
                 >
                     <div className="flex items-baseline justify-between mb-1">
                       <div className="flex items-baseline gap-2">
-                        {item.channel === "scheduler" && jobInfo ? (
+                        {jobInfo ? (
                         <span className="text-sm font-semibold text-emerald-400">{agentDisplayName}</span>
                         ) : (
                           <span className={cn(
@@ -470,7 +474,7 @@ export function Chat() {
                           </span>
                         )}
                       </div>
-                      {item.channel === "scheduler" ? (
+                      {jobInfo ? (
                         <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">
                           Scheduled Job
                         </span>
@@ -480,7 +484,7 @@ export function Chat() {
                       </span>
                       ) : null}
                     </div>
-                    {item.channel === "scheduler" && jobInfo && (
+                    {jobInfo && (
                       <div className="text-[13px] font-semibold mb-2">[{jobInfo.label}]</div>
                     )}
                     <Streamdown plugins={{ code }}>{displayText}</Streamdown>
@@ -517,8 +521,8 @@ export function Chat() {
       </div>
 
       {/* Input */}
-      <div className="py-4 border-t border-border/50 shrink-0">
-        <div className={cn(CHAT_WIDTH, "mx-auto")}>
+      <div className="pt-3 pb-[22px] shrink-0">
+        <div className="w-[90%] md:w-[80%] lg:w-[65%] max-w-3xl mx-auto">
           {!connected && (
             <div className="text-xs text-destructive mb-2">Disconnected — reconnecting...</div>
           )}

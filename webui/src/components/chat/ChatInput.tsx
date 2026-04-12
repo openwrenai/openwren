@@ -68,7 +68,7 @@ export function ChatInput({
         placeholder="Type a message..."
         disabled={isDisabled}
         rows={1}
-        className="w-full resize-none bg-transparent px-4 pt-2 pb-1 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none disabled:cursor-not-allowed"
+        className="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none disabled:cursor-not-allowed min-h-[3.5rem]"
       />
 
       <div className="flex items-center justify-end px-2 pb-2">

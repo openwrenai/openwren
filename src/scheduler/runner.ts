@@ -119,6 +119,18 @@ export async function executeJob(
     const deliveryText = `[${job.name}] ${rawText}`;
     const durationMs = Date.now() - startMs;
 
+    // Emit bus event so WebUI picks up the job result live
+    bus.emit("message_out", {
+      channel: "scheduler",
+      userId: job.user,
+      agentId: job.agent,
+      agentName: agentConfig.name,
+      text: rawText,
+      compacted: loopResult.compacted,
+      nearThreshold: loopResult.nearThreshold,
+      timestamp: Date.now(),
+    });
+
     // Prune isolated job session if needed
     if (job.isolated) {
       pruneJobSession(
