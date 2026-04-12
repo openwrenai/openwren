@@ -99,7 +99,7 @@ export function initWorkspace(): void {
   }
 }
 
-function defaultSoul(agentId: string, agentName: string): string {
+export function defaultSoul(agentId: string, agentName: string): string {
   return `# Who You Are
 
 You are ${agentName}, a personal AI assistant running locally on your owner's machine.

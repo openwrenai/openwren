@@ -9,6 +9,7 @@ import { registerScheduleRoutes } from "./routes/schedules";
 import { registerSessionRoutes } from "./routes/sessions";
 import { registerUsageRoutes } from "./routes/usage";
 import { registerStatusRoutes } from "./routes/status";
+import { registerAgentRoutes } from "./routes/agents";
 
 /** The Fastify instance — available after startGateway() resolves. */
 export let app: FastifyInstance;
@@ -49,6 +50,7 @@ export async function startGateway(): Promise<void> {
   await registerSessionRoutes(app);
   await registerUsageRoutes(app);
   await registerStatusRoutes(app);
+  await registerAgentRoutes(app);
 
   // Serve webui/dist/ as static files (SPA with fallback to index.html)
   const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,7 +67,7 @@ export async function startGateway(): Promise<void> {
     });
   }
 
-  const port = parseInt(process.env.PORT ?? "3000", 10);
+  const port = parseInt(process.env.GATEWAY_PORT ?? process.env.PORT ?? "3000", 10);
   const host = "127.0.0.1"; // never expose to 0.0.0.0
 
   await app.listen({ port, host });

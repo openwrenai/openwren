@@ -43,7 +43,14 @@ export interface ScheduleJob {
   jobId: string;
   name: string;
   agent: string;
+  schedule: {
+    cron?: string;
+    every?: string;
+    at?: string;
+  };
   prompt: string;
+  channel: string;
+  isolated: boolean;
   enabled: boolean;
   nextRun: string | null;
 }
@@ -71,6 +78,70 @@ export interface SessionMessagesResponse {
     isolated?: boolean;
   }>;
   total: number;
+}
+
+// --- Agents ---
+
+export interface Agent {
+  id: string;
+  name: string;
+  model: string | null;
+  fallback: string | null;
+  role: string | null;
+  description: string | null;
+  defaultModel?: string;
+  defaultFallback?: string;
+}
+
+export interface AgentListItem {
+  id: string;
+  name: string;
+}
+
+export interface AgentListResponse {
+  agents: AgentListItem[];
+}
+
+export interface AgentFile {
+  name: string;
+  exists: boolean;
+}
+
+export interface AgentFilesResponse {
+  files: AgentFile[];
+}
+
+export interface AgentFileContentResponse {
+  name: string;
+  content: string;
+}
+
+// --- Channels ---
+
+export interface AgentChannel {
+  name: string;
+}
+
+export interface AgentChannelsResponse {
+  channels: AgentChannel[];
+}
+
+// --- Skills ---
+
+export interface AgentSkill {
+  name: string;
+  description: string;
+  autoload: boolean;
+  enabled: boolean;
+  blocked: boolean;
+  blockReason: string | null;
+  source: string;
+}
+
+export interface AgentSkillsResponse {
+  skills: AgentSkill[];
+  total: number;
+  enabled: number;
 }
 
 // --- WebSocket messages (client -> server) ---

@@ -232,15 +232,137 @@ Chat bubble polish:
 
 Agent Pause now and let user review progress so far...
 
-**Step 4 — Agents**
-- [ ] Agent list — all configured agents with name, model, status
-- [ ] Soul file editor — view and edit `~/.openwren/agents/{id}/soul.md` directly in the UI
-- [ ] Per-agent model override — change model/fallback without editing config file
-- [ ] Model picker — browse available models when selecting per-agent or default model:
-  - llmgateway: use `@llmgateway/models` package (cached weekly, includes pricing, context length, feature flags like tool support)
-  - Direct providers (anthropic, openai, google, etc.): no model list API available — allow free-text model ID input with known models as suggestions
-  - Filter by `tools: true` (OpenWren requires tool calling), group by provider family, show pricing per million tokens
-- [ ] Agent creation — add a new agent (creates soul.md stub, adds to config)
+**Step 4a — Agent Page: Dropdown, Tabs & File Editor**
+
+Single `/agents` page with dropdown picker at the top to select an agent, tabbed content below. No table, no modal, no detail page navigation. Inspired by OpenClaw's agent management pattern. See `development/phases/phase10/ui/agents.md` for wireframes.
+
+Packages to install:
+- None (backend already has everything needed)
+
+Backend (`src/gateway/routes/agents.ts` — new file):
+- [x] `GET /api/agents` — returns lightweight list: `{ agents: Array<{ id, name }> }`. Just enough for the dropdown picker.
+- [x] `GET /api/agents/:id` — returns full agent detail: `{ id, name, model, fallback, role, description, defaultModel, defaultFallback }`. `model`/`fallback` are the agent's own overrides (string or null). `defaultModel`/`defaultFallback` are the global defaults (for "Use default (currently: X)" labels). 404 if agent ID not found.
+- [x] `GET /api/agents/:id/files` — returns list of known agent files with existence status: `{ files: Array<{ name: string, exists: boolean }> }`. Checks for: `soul.md`, `heartbeat.md`, `workflow.md`. Reads from `~/.openwren/agents/{id}/`. 404 if agent not in config.
+- [x] `GET /api/agents/:id/files/:filename` — reads file content, returns `{ name: string, content: string }`. Returns empty string content if file doesn't exist yet (allows creating new files). Whitelisted filenames only: `soul.md`, `heartbeat.md`, `workflow.md` — 400 for anything else. 404 if agent not in config.
+- [x] `PUT /api/agents/:id/files/:filename` — accepts `{ content: string }`, writes to `~/.openwren/agents/{id}/{filename}`. Creates parent directory if missing (`mkdirSync recursive`). Same filename whitelist as GET. No config reload needed — `loadSystemPrompt()` reads soul.md fresh from disk on every message. 404 if agent not in config, 400 if filename not whitelisted.
+- [x] Auth: copy the `authenticate()` pattern from other route files (Bearer token + `timingSafeEqual`). Same pattern as `sessions.ts`, `status.ts`, etc.
+- [x] Register in `src/gateway/server.ts` — import `registerAgentRoutes`, call after `registerStatusRoutes`.
+
+Frontend — Types:
+- [x] `webui/src/lib/types.ts` — add `AgentListItem` (`{ id, name }`), `Agent` type: `{ id, name, model: string | null, fallback: string | null, role: string | null, description: string | null, defaultModel?: string, defaultFallback?: string }`. Add `AgentListResponse`, `AgentFile`, `AgentFilesResponse`, `AgentFileContentResponse`.
+
+Frontend — Agents page rewrite:
+- [x] `webui/src/pages/Agents.tsx` — replace placeholder. Layout:
+  - **Header row**: page title "Agents", agent dropdown picker (populated from `GET /api/agents`), "+ New Agent" button, "Delete" button.
+  - **Tabs**: Overview, Files, Skills, Channels, Cron Jobs. Implemented using shadcn `Tabs` component.
+  - Agent dropdown defaults to first agent in list. Changing dropdown fetches detail from `GET /api/agents/:id`.
+  - Skills, Channels, Cron Jobs tabs show "Coming soon" placeholder.
+
+Frontend — Overview tab (`webui/src/components/agents/OverviewTab.tsx`):
+- [x] Editable form with TanStack Form (`useForm`). Fields: name, description, role (select), model + fallback (text inputs with Browse buttons), "Use default model/fallback" checkboxes. Save sends PATCH with only changed fields. Cancel reverts form.
+
+Frontend — Files tab (`webui/src/components/agents/FilesTab.tsx`):
+- [x] Fetches `GET /api/agents/:id/files` on mount to get file list with exists/missing status.
+- [x] Renders sub-tabs for each known file: Soul, Heartbeat (and Workflow if agent role is manager). Files that don't exist show "MISSING" badge.
+- [x] Per-file textarea editor with Save/Reset buttons. Save writes via `PUT /api/agents/:id/files/:filename`.
+- [x] If file is missing, textarea starts empty. Saving creates the file on disk.
+
+Agent Pause now and let user review progress so far...
+
+**Step 4b — Agent Config Editing, Creation & Deletion**
+
+Mutating operations — convert read-only Overview tab to editable form, add create/delete, model picker.
+
+Packages to install:
+- `comment-json` (backend, in root `package.json`) — parses JSON with comments, preserves them through stringify. Used for safe read-modify-write of `openwren.json` without losing user comments.
+- `@tanstack/react-form` (frontend, in `webui/package.json`) — form state management with dirty field tracking. Used across all form pages (agents, teams, config, schedules).
+
+Backend — Config write utility (`src/config-writer.ts` — new file):
+- [x] `readRawConfig()` — reads `openwren.json` with `comment-json`'s `parse()`. Returns the flat dot-notation object with comments preserved in symbols.
+- [x] `writeConfigKeys(entries: Record<string, unknown>)` — reads raw config, sets each key (dot-notation, e.g. `"agents.atlas.model": "openai/gpt-4o"`), writes back with `comment-json`'s `stringify(obj, null, 2)`. Atomic: read → modify → write in one call.
+- [x] `removeConfigKeys(keys: string[])` — reads raw config, deletes each key, writes back. Used when clearing a model override or deleting an agent.
+- [x] All writes go to `path.join(config.workspaceDir, "openwren.json")`.
+
+Backend — Hot reload (`src/config.ts`):
+- [x] Refactor: extracted `parseConfig()` pure function from `loadConfig()`. `loadConfig()` calls `ensureWorkspace()` then `parseConfig()`.
+- [x] `reloadConfig()` — exported function. Calls `parseConfig()`, then `Object.assign(config, freshConfig)`. All modules see updates immediately. Called after every config write (PATCH, POST, DELETE).
+
+Backend — Agent CRUD routes (added to `src/gateway/routes/agents.ts`):
+- [x] `PATCH /api/agents/:id` — accepts partial body: any subset of `{ name, description, role, model, fallback }`. Only writes provided fields as dot-notation keys. `null` or empty values remove the key (clears override). Calls `reloadConfig()`. Returns updated agent. 404 if not found.
+- [x] `POST /api/agents` — accepts `{ id, name, description?, role?, model?, fallback? }`. Validates ID format. Writes dot-notation keys, calls `reloadConfig()`, creates on-disk structure (agent dir, soul.md stub, memory, workspace, sessions). 409 if exists.
+- [x] `DELETE /api/agents/:id` — removes all `agents.{id}.*` keys. Calls `reloadConfig()`. Preserves files on disk. 400 if referenced in a team. 404 if not found.
+
+Backend — Models endpoint (added to `src/gateway/routes/agents.ts`):
+- [x] `GET /api/models` — returns `{ defaultModel, providers: Array<{ id, models[] }> }`. All supported providers listed. Ollama dynamic from local API. llmgateway is union of all. Free-text always allowed in frontend.
+
+Frontend — Overview tab editable (`OverviewTab.tsx`):
+- [x] Editable form using TanStack Form `useForm`. Fields: name, description, role (select), model + fallback (text inputs with Browse buttons).
+- [x] "Use default model" and "Use default fallback" checkboxes. When checked: field disabled, shows `defaultModel`/`defaultFallback` as placeholder. Save sends `null` to clear override.
+- [x] Save (PATCH with changed fields only) and Cancel buttons.
+
+Frontend — Create Agent Dialog (`CreateAgentDialog.tsx`):
+- [x] Modal with Agent ID (auto-slug from Name), Name, Description, Role, Model (use default checkbox + Browse). On submit: `POST /api/agents`. On success: close, refetch, auto-select. On 409: error.
+
+Frontend — Delete Agent:
+- [x] Delete button in page header. Confirmation dialog via shadcn `AlertDialog`. On confirm: `DELETE /api/agents/:id`. On success: refetch, select first. On 400 (team ref): error toast.
+
+Frontend — Model Picker Dialog (`ModelPicker.tsx`):
+- [x] Fetches `GET /api/models`, caches. Search filter, provider-grouped list, free-text input for unlisted models. On select: closes dialog, sets form field.
+
+Agent Pause now and let user review progress so far...
+
+**Step 4c — Cron Jobs Tab (Agent Page)**
+
+Enable the Cron Jobs tab on the Agents page. Read-only display of jobs assigned to the selected agent with enable/disable/run-now controls. Job creation/editing deferred to Step 7 (full Schedules page).
+
+Backend:
+- [x] No new endpoints — `GET /api/schedules` already returns all jobs with `agent` field. Frontend filters client-side. Enable/disable/run-now endpoints already exist.
+
+Frontend — Types:
+- [x] `webui/src/lib/types.ts` — expanded `ScheduleJob` type with `schedule` (cron/every/at), `channel`, `isolated` fields.
+
+Frontend — Cron Jobs tab (`webui/src/components/agents/CronJobsTab.tsx` — new):
+- [x] Fetches `GET /api/schedules`, filters to `job.agent === agentId`.
+- [x] Card per job showing: name (bold), schedule badge (Every/Cron/At with icon), enabled/disabled badge (green/gray), isolated badge, next run time.
+- [x] Per-job "Run Now" button + ••• dropdown menu with Enable/Disable toggle.
+- [x] Click card to expand: shows prompt text, channel, and last 5 run history entries from `GET /api/schedules/:id/history` (timestamp, ok/error badge, duration, error message).
+- [x] Empty state: "No scheduled jobs for {agentName}".
+- [x] Tab enabled in `Agents.tsx`, wired with `agentId` and `agentName` props.
+
+Agent Pause now and let user review progress so far...
+
+**Step 4d — Skills Tab (Agent Page)**
+
+Per-agent skill list with enable/disable toggles. Shows all skills that pass gates for the selected agent, with status indicators for blocked skills (missing binaries, config, etc.).
+
+Per-agent skill overrides — stored as `agents.{id}.skills.{name}.enabled` in `openwren.json`. Smart write/delete: only store the key when per-agent choice differs from global. Delete when it matches (no stale keys). Precedence: per-agent override > global override (`skills.entries`) > frontmatter default.
+
+Backend:
+- [x] `AgentConfig` in `config.ts` — added optional `skills?: Record<string, { enabled?: boolean }>` field.
+- [x] `passesGates()` in `skills.ts` — checks per-agent override before global `skills.entries` override. Per-agent `enabled: true` can re-enable a globally disabled skill for that agent.
+- [x] `getSkillInventory()` in `skills.ts` — exported function that scans all skill directories, runs gate checks, returns `SkillInfo[]` with `enabled`, `blocked`, `blockReason`, `source` per skill.
+- [x] `GET /api/agents/:id/skills` — returns `{ skills, total, enabled }` using `getSkillInventory()`.
+- [x] `PATCH /api/agents/:id/skills` — accepts `{ entries: Record<string, { enabled: boolean }> }`. Smart logic: if toggle matches global state, deletes the per-agent key (clean). If differs, writes `agents.{id}.skills.{name}.enabled`. Calls `reloadConfig()`.
+- [x] Binary cache TTL — `isBinaryAvailable()` cache now expires after 5 minutes so newly installed binaries are detected without restart.
+
+Frontend:
+- [x] `AgentSkill` and `AgentSkillsResponse` types in `types.ts`.
+- [x] `SkillsTab.tsx` — card per skill with name, description, source badge, enable/disable toggle. Blocked skills dimmed with amber badge and reason. Search filter. Source filter badges (All / Bundled / Agent). Enable All / Disable All / Save buttons. Dirty tracking.
+- [x] Tab enabled in `Agents.tsx`.
+
+Agent Pause now and let user review progress so far...
+
+**Step 4e — Channels Tab (Agent Page)**
+
+Read-only display of messaging channels bound to this agent. Only shows channels with actual bindings in `config.bindings` (Telegram, Discord). WebSocket is not listed — it's a transport layer, not a per-agent channel binding.
+
+Backend:
+- [x] `GET /api/agents/:id/channels` — scans `config.bindings` for entries where this agent has a binding. Returns `{ channels: Array<{ name: string }> }`.
+
+Frontend:
+- [x] `AgentChannel` and `AgentChannelsResponse` types in `types.ts`.
+- [x] `ChannelsTab.tsx` — card per channel with capitalized name, "Connected" badge, message icon. Empty state for agents with no bindings.
+- [x] Tab enabled in `Agents.tsx`.
 
 Agent Pause now and let user review progress so far...
 

@@ -478,6 +478,10 @@ export function Chat() {
                         <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">
                           Scheduled Job
                         </span>
+                      ) : item.role === "assistant" && item.channel === "scheduler" ? (
+                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">
+                          Scheduled Job
+                        </span>
                       ) : item.role === "user" && item.channel && item.channel !== "webui" ? (
                         <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
                         via {item.channel.charAt(0).toUpperCase() + item.channel.slice(1)}
