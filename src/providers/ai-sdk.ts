@@ -1,4 +1,4 @@
-import { generateText, streamText, tool, jsonSchema } from "ai";
+import { generateText, streamText, smoothStream, tool, jsonSchema } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -13,6 +13,7 @@ import type {
   LLMProvider,
   LLMResponse,
   Message,
+  StreamPart,
   ToolDefinition,
 } from "./index";
 
@@ -80,14 +81,29 @@ export class AiSdkProvider implements LLMProvider {
   }
 
   // ---------------------------------------------------------------------------
-  // chatStream() — streaming, used by interactive channels and WebUI
+  // chatStream() — streaming LLM call for interactive channels (WebUI)
+  //
+  // Uses AI SDK's fullStream instead of textStream. fullStream yields BOTH
+  // text deltas AND tool calls from a single streaming request. This avoids
+  // needing two LLM calls (one to check if it's text vs tool, another to stream).
+  //
+  // The agent loop consumes these StreamPart events to:
+  //   - Forward text deltas to the WS client in real-time via streamCallback
+  //   - Collect tool calls and execute them (then loop again)
+  //   - Accumulate usage stats from the finish event
+  //
+  // AI SDK field name gotchas (differ from what you'd expect):
+  //   - text-delta uses .text (not .textDelta)
+  //   - tool-call uses .input (not .args) for tool arguments
+  //   - finish uses .totalUsage (not .usage) for accumulated token counts
+  //   - errors arrive as stream parts (type: 'error'), not thrown exceptions
   // ---------------------------------------------------------------------------
 
   async *chatStream(
     systemPrompt: string,
     messages: Message[],
     tools: ToolDefinition[]
-  ): AsyncIterable<string> {
+  ): AsyncIterable<StreamPart> {
     const languageModel = this.resolveModel();
     const sdkTools = this.translateTools(tools);
 
@@ -96,10 +112,40 @@ export class AiSdkProvider implements LLMProvider {
       system: systemPrompt,
       messages: messages as ModelMessage[],
       tools: sdkTools,
+        experimental_transform: smoothStream({ chunking: "word" }),
     });
 
-    for await (const delta of result.textStream) {
-      yield delta;
+    // Iterate the full stream — yields text-delta, tool-call, finish, error, and other
+    // event types. We only care about the four listed below; others are silently skipped.
+    for await (const part of result.fullStream) {
+      if (part.type === "text-delta") {
+        // AI SDK field: part.text (not part.textDelta)
+        yield { type: "text", text: part.text };
+      } else if (part.type === "tool-call") {
+        // AI SDK field: part.input (not part.args) — the parsed tool arguments
+        yield {
+          type: "tool-call",
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          args: (part.input ?? {}) as Record<string, unknown>,
+        };
+      } else if (part.type === "finish") {
+        // AI SDK field: part.totalUsage (not part.usage) — accumulated across all steps
+        yield {
+          type: "finish",
+          usage: {
+            inputTokens: part.totalUsage?.inputTokens ?? 0,
+            outputTokens: part.totalUsage?.outputTokens ?? 0,
+          },
+        };
+      } else if (part.type === "error") {
+        // AI SDK emits errors as stream parts, not thrown exceptions.
+        // Re-throw so the agent loop's try/catch can handle it and fall back
+        // to the non-streaming chat() path.
+        const err = (part as any).error;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Stream error: ${msg}`);
+      }
     }
   }
 

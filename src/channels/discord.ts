@@ -84,7 +84,7 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     }
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, userId);
+    const commandResponse = handleCommand(text, userId, agentId);
     if (commandResponse !== null) {
       await message.reply(commandResponse);
       return;
@@ -119,7 +119,8 @@ function createClient(agentId: string, agentConfig: AgentConfig): Client {
     // non-blocking pattern as Telegram keeps the confirmation flow consistent
     // and avoids any risk of handler backpressure blocking confirmation replies.
     runAgentLoop(userId, agentId, agentConfig, text, confirm, false, {
-      usageContext: { source: "chat", userId, sessionId: "main" },
+      channel: "discord",
+        usageContext: { source: "chat", userId, sessionId: "main" },
     })
       .then(async (result) => {
         console.log(

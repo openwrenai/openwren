@@ -31,8 +31,8 @@ import type { Channel } from "./types";
 /** Send a chat message to an agent. */
 interface WsSendMessage {
   type: "message";
-  agentId: string; // which agent to talk to (e.g. "atlas")
-  text: string;    // the user's message
+  agentId: string;     // which agent to talk to (e.g. "atlas")
+  text: string;        // the user's message
 }
 
 /** Reply to a tool confirmation prompt (shell command approval). */
@@ -212,7 +212,7 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
     const text = msg.text.trim();
 
     // Check for slash commands (/new, /reset) before reaching the agent loop
-    const commandResponse = handleCommand(text, client.userId);
+    const commandResponse = handleCommand(text, client.userId, agentId);
     if (commandResponse !== null) {
       sendTo(client, "message", { agentId, text: commandResponse });
       return;
@@ -257,17 +257,78 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
       });
     };
 
+    // Streaming timestamp buffer
+    // The model sometimes echoes back injected timestamps (e.g. "[Apr 8, 02:49]")
+    // at the start of its response. We buffer the first ~18 chars to detect and
+    // strip them before they reach the frontend. Once the check is done, all
+    // subsequent deltas pass through with zero overhead.
+    let streamBuffer = "";
+    let bufferFlushed = false;
+    const TIMESTAMP_RE = /\[(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{2}:\d{2}\]\s*/g;
+
     try {
-      const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
-        usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
+        const result = await runAgentLoop(client.userId, agentId, agentConfig, text, confirm, false, {
+          channel: "webui",
+          usageContext: { source: "chat", userId: client.userId, sessionId: "main" },
+          streamCallback: (delta) => {
+          if (bufferFlushed) {
+              sendTo(client, "token", { text: delta, agentId });
+            return;
+            }
+
+          streamBuffer += delta;
+
+          // No leading bracket — no timestamp possible, flush immediately
+          if (!streamBuffer.startsWith("[")) {
+              bufferFlushed = true;
+            sendTo(client, "token", { text: streamBuffer, agentId });
+            return;
+            }
+
+          // Starts with [ but not enough chars yet — keep buffering
+          // Full timestamp is max ~18 chars: "[Apr 8, 02:49] "
+          if (streamBuffer.length < 18) return;
+
+          // Enough chars — check for timestamp, strip if found, flush
+          bufferFlushed = true;
+          const cleaned = streamBuffer.replace(TIMESTAMP_RE, "");
+          if (cleaned) {
+              sendTo(client, "token", { text: cleaned, agentId });
+            }
+          },
+          // Emits tool_use so the frontend can show inline tool call cards
+          // (e.g. "⚙ Using save_memory...") with a spinner while the tool runs
+          onToolUse: (toolCallId, toolName, args) => {
+            sendTo(client, "tool_use", {
+              agentId,
+              agentName: agentConfig.name,
+              toolCallId,
+              toolName,
+              args,
+              timestamp: Date.now(),
+            });
+          },
+          // Emits tool_result so the frontend can update the tool card with
+          // the result and swap the spinner for a checkmark.
+          // Result truncated to 500 chars to prevent large outputs (e.g. file
+          // reads) from flooding the WebSocket connection.
+          onToolResult: (toolCallId, toolName, result) => {
+            sendTo(client, "tool_result", {
+              agentId,
+              agentName: agentConfig.name,
+              toolCallId,
+              toolName,
+              result: result.slice(0, 500),
+              timestamp: Date.now(),
+            });
+          },
       });
       console.log(
         `[websocket] ${agentConfig.name} reply: ${result.text.slice(0, 120)}${result.text.length > 120 ? "..." : ""}`
       );
 
-      // Bus: broadcast the agent's response to WS observers
       bus.emit("message_out", {
-        channel: "websocket",
+          channel: "websocket",
         userId: client.userId,
         agentId,
         agentName: agentConfig.name,
@@ -275,31 +336,29 @@ async function handleMessage(client: ConnectedClient, msg: WsClientMessage): Pro
         compacted: result.compacted,
         nearThreshold: result.nearThreshold,
         timestamp: Date.now(),
-      });
+        });
 
-      if (result.compacted) {
-        // Bus: notify observers that session history was compacted
+        if (result.compacted) {
         bus.emit("session_compacted", {
-          userId: client.userId,
+            userId: client.userId,
           agentId,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+      console.error("[websocket] Error running agent loop:", err);
+      bus.emit("agent_error", {
+          channel: "websocket",
+        userId: client.userId,
+        agentId,
+          agentName: agentConfig.name,
+          error,
           timestamp: Date.now(),
         });
       }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      console.error("[websocket] Error running agent loop:", err);
-      // Bus: notify observers that the agent loop failed
-      bus.emit("agent_error", {
-        channel: "websocket",
-        userId: client.userId,
-        agentId,
-        agentName: agentConfig.name,
-        error,
-        timestamp: Date.now(),
-      });
     }
   }
-}
 
 // ---------------------------------------------------------------------------
 // WebSocketChannel
@@ -332,7 +391,7 @@ class WebSocketChannel implements Channel {
       "confirm_request",
       "schedule_run",
       "schedule_error",
-    ];
+      ];
     for (const eventName of eventNames) {
       bus.on(eventName, (payload) => broadcast(eventName, payload));
     }

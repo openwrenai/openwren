@@ -49,13 +49,15 @@ export function initWorkspace(): void {
     }
   }
 
-  // Create per-user session directories
+  // Create per-user, per-agent session directories
   const userIds = [...Object.keys(config.users), "local"];
   for (const userId of userIds) {
-    const userDir = path.join(config.workspaceDir, "sessions", userId);
-    const archiveDir = path.join(userDir, "archives");
-    if (!fs.existsSync(archiveDir)) {
-      fs.mkdirSync(archiveDir, { recursive: true });
+    for (const agentId of Object.keys(config.agents)) {
+      const agentDir = path.join(config.workspaceDir, "sessions", userId, agentId);
+      const archiveDir = path.join(agentDir, "archives");
+      if (!fs.existsSync(archiveDir)) {
+        fs.mkdirSync(archiveDir, { recursive: true });
+      }
     }
   }
 
@@ -97,7 +99,7 @@ export function initWorkspace(): void {
   }
 }
 
-function defaultSoul(agentId: string, agentName: string): string {
+export function defaultSoul(agentId: string, agentName: string): string {
   return `# Who You Are
 
 You are ${agentName}, a personal AI assistant running locally on your owner's machine.

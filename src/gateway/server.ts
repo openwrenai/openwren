@@ -1,9 +1,16 @@
 import Fastify, { FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
+import fastifyStatic from "@fastify/static";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 import { config } from "../config";
 import { registerScheduleRoutes } from "./routes/schedules";
 import { registerSessionRoutes } from "./routes/sessions";
 import { registerUsageRoutes } from "./routes/usage";
+import { registerStatusRoutes } from "./routes/status";
+import { registerAgentRoutes } from "./routes/agents";
+import { registerTeamRoutes } from "./routes/teams";
 
 /** The Fastify instance — available after startGateway() resolves. */
 export let app: FastifyInstance;
@@ -43,10 +50,33 @@ export async function startGateway(): Promise<void> {
   await registerScheduleRoutes(app);
   await registerSessionRoutes(app);
   await registerUsageRoutes(app);
+  await registerStatusRoutes(app);
+  await registerAgentRoutes(app);
+  await registerTeamRoutes(app);
 
-  const port = parseInt(process.env.PORT ?? "3000", 10);
+  // Serve webui/dist/ as static files (SPA with fallback to index.html)
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const webuiDist = resolve(__dirname, "../webui/dist");
+  if (existsSync(webuiDist)) {
+    await app.register(fastifyStatic, {
+      root: webuiDist,
+      prefix: "/",
+      wildcard: false,
+    });
+    // SPA fallback — serve index.html for any non-API, non-WS route
+    app.setNotFoundHandler(async (_request, reply) => {
+      return reply.sendFile("index.html");
+    });
+  }
+
+  const port = parseInt(process.env.GATEWAY_PORT ?? process.env.PORT ?? "3000", 10);
   const host = "127.0.0.1"; // never expose to 0.0.0.0
 
   await app.listen({ port, host });
   console.log(`[gateway] Listening on http://${host}:${port}`);
+
+  if (config.gateway.wsToken) {
+    const token = encodeURIComponent(config.gateway.wsToken);
+    console.log(`[gateway] Dashboard: http://${host}:${port}?token=${token}`);
+  }
 }

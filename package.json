@@ -11,10 +11,11 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills && cp -r drizzle dist/drizzle",
+    "build": "rm -rf dist && tsup && cp -r src/templates dist/templates && cp -r src/skills dist/skills && cp -r drizzle dist/drizzle && npm run build:webui",
+    "build:webui": "cd webui && npm run build && mkdir -p ../dist/webui && cp -r dist ../dist/webui/dist",
     "typecheck": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
+    "dev": "concurrently -n backend,webui -c blue,magenta \"tsx src/index.ts\" \"cd webui && npm run dev\"",
     "cli": "tsx src/cli.ts",
     "scratch": "tsx src/scratch.ts"
   },
@@ -43,6 +44,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.3.0",
+    "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.9",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
@@ -57,11 +59,13 @@
     "@ai-sdk/openai": "^3.0.48",
     "@ai-sdk/xai": "^3.0.74",
     "@anthropic-ai/sdk": "^0.77.0",
+    "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.2.0",
     "@llmgateway/ai-sdk-provider": "^3.5.0",
     "@mozilla/readability": "^0.6.0",
     "ai": "^6.0.141",
     "better-sqlite3": "^12.8.0",
+    "comment-json": "^5.0.0",
     "croner": "^10.0.1",
     "discord.js": "^14.25.1",
     "dotenv": "^17.3.1",
