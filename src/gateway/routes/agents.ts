@@ -417,9 +417,12 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 
     const providers: Array<{ id: string; models: string[] }> = [];
 
-    // Static providers
+    // Static providers — only include those with a configured API key
     for (const [id, models] of Object.entries(STATIC_MODELS)) {
-      providers.push({ id, models });
+      const providerConfig = (config.providers as Record<string, Record<string, string>>)[id];
+      if (providerConfig?.apiKey) {
+        providers.push({ id, models });
+      }
     }
 
     // Ollama — dynamic from local API

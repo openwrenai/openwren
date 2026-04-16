@@ -162,6 +162,18 @@ export interface AgentSkillsResponse {
   enabled: number;
 }
 
+// --- Config ---
+
+export interface ConfigResponse {
+  config: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  _meta: { sensitiveKeys: string[] };
+}
+
+export interface ConfigRawResponse {
+  content: string;
+}
+
 // --- WebSocket messages (client -> server) ---
 
 export interface WsSendMessage {
