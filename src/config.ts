@@ -644,6 +644,11 @@ function loadConfig(): Config {
 
 export const config = loadConfig();
 
+/** Expose default config for the config editor. */
+export function getDefaultConfig(): Omit<Config, "workspaceDir"> {
+  return structuredClone(defaultConfig);
+}
+
 /**
  * Hot-reload config from disk. Mutates the existing `config` object in place
  * so all modules that import it see updates immediately. No restart needed.

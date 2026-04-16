@@ -11,6 +11,7 @@ import { registerUsageRoutes } from "./routes/usage";
 import { registerStatusRoutes } from "./routes/status";
 import { registerAgentRoutes } from "./routes/agents";
 import { registerTeamRoutes } from "./routes/teams";
+import { registerConfigRoutes } from "./routes/config";
 
 /** The Fastify instance — available after startGateway() resolves. */
 export let app: FastifyInstance;
@@ -53,6 +54,7 @@ export async function startGateway(): Promise<void> {
   await registerStatusRoutes(app);
   await registerAgentRoutes(app);
   await registerTeamRoutes(app);
+  await registerConfigRoutes(app);
 
   // Serve webui/dist/ as static files (SPA with fallback to index.html)
   const __dirname = dirname(fileURLToPath(import.meta.url));

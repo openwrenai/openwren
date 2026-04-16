@@ -20,6 +20,14 @@ Project uses **tsup** (esbuild-based), package type `"module"` (ESM).
 
 > **Important:** Run `npx tsc --noEmit` (no file args) — passing individual files bypasses `tsconfig.json` settings.
 
+## Preview / Dashboard
+
+`npm run dev` (root) starts both backend + Vite frontend via `concurrently`. `.claude/launch.json` is configured to run this on port 5173.
+
+- **GATEWAY_PORT=3000** is set in `launch.json` env — required because the preview tool injects `PORT=5173`, which the backend would pick up and collide with Vite. The Vite proxy (`vite.config.ts`) forwards `/api` and `/ws` to `127.0.0.1:3000`.
+- **Auth token**: The dashboard requires a Bearer token. The token lives in `.env` as `WS_TOKEN`. After starting the preview, set it in the browser: `localStorage.setItem("ow_token", "<token>")` then navigate to `/?token=<token>`. The app saves it to localStorage and strips it from the URL.
+- For this project the token is `test123`.
+
 ## Gotchas & Conventions
 
 - Nothing reads `process.env` directly (except `PORT` for gateway and `OPENWREN_HOME` for workspace path override)

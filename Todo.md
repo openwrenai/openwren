@@ -53,8 +53,6 @@ A local browser dashboard at `http://127.0.0.1:3000`. Opened via `openwren dashb
 - [x] Add `webui` build step to project build script
 - [x] TanStack Router setup with all routes + grouped sidebar layout + top bar + dark theme
 
-Agent Pause now and let user review progress so far...
-
 **Step 2 — Dashboard**
 - [x] `GET /api/status` endpoint — uptime, agent count, active sessions, memory file count, channel status
 - [x] System Status card — uptime, agents, sessions, memory files
@@ -66,8 +64,6 @@ Agent Pause now and let user review progress so far...
 - [x] Agents card — agent list with name, model, role badge (capped at 10 with "View all" link)
 - [x] Token-in-URL auth — `?token=xxx` saved to localStorage, sent as Bearer on all API calls
 - [x] `openwren dashboard` CLI includes token in URL
-
-Agent Pause now and let user review progress so far...
 
 **Step 3 — Chat & Sessions (two-mode layout)**
 
@@ -230,8 +226,6 @@ Chat bubble polish:
 - [x] Isolated card merge — isolated job prompt + response merged into single card. Prompt shown as muted sub-line (`text-xs`), response rendered below with Streamdown. Prevents two dashed-border cards glued together.
 - [x] Non-isolated scheduler assistant messages — show agent name (Atlas) instead of "Job: {name}". The `[prefix]` is still stripped from displayed text. Only `role === "user"` scheduler messages get the "Job:" label.
 
-Agent Pause now and let user review progress so far...
-
 **Step 4a — Agent Page: Dropdown, Tabs & File Editor**
 
 Single `/agents` page with dropdown picker at the top to select an agent, tabbed content below. No table, no modal, no detail page navigation. Inspired by OpenClaw's agent management pattern. See `development/phases/phase10/ui/agents.md` for wireframes.
@@ -266,8 +260,6 @@ Frontend — Files tab (`webui/src/components/agents/FilesTab.tsx`):
 - [x] Renders sub-tabs for each known file: Soul, Heartbeat (and Workflow if agent role is manager). Files that don't exist show "MISSING" badge.
 - [x] Per-file textarea editor with Save/Reset buttons. Save writes via `PUT /api/agents/:id/files/:filename`.
 - [x] If file is missing, textarea starts empty. Saving creates the file on disk.
-
-Agent Pause now and let user review progress so far...
 
 **Step 4b — Agent Config Editing, Creation & Deletion**
 
@@ -308,8 +300,6 @@ Frontend — Delete Agent:
 
 Frontend — Model Picker Dialog (`ModelPicker.tsx`):
 - [x] Fetches `GET /api/models`, caches. Search filter, provider-grouped list, free-text input for unlisted models. On select: closes dialog, sets form field.
-
-Agent Pause now and let user review progress so far...
 
 **Step 4c — Cron Jobs Tab (Agent Page)**
 
@@ -363,8 +353,6 @@ Frontend:
 - [x] `AgentChannel` and `AgentChannelsResponse` types in `types.ts`.
 - [x] `ChannelsTab.tsx` — card per channel with capitalized name, "Connected" badge, message icon. Empty state for agents with no bindings.
 - [x] Tab enabled in `Agents.tsx`.
-
-Agent Pause now and let user review progress so far...
 
 **Step 5 — Teams**
 
@@ -431,14 +419,72 @@ Frontend — Team Dialog (`webui/src/components/teams/TeamDialog.tsx` — new):
 - [x] Create: `POST /api/teams`, Edit: `PATCH /api/teams/:name`.
 - [x] On success: close dialog, refetch team list.
 
-Agent Pause now and let user review progress so far...
 
 **Step 6 — Config**
-- [ ] Config editor — view and edit `~/.openwren/openwren.json` via form or raw JSON5
-- [ ] Config validation — show errors before saving, protect against concurrent edits
-- [ ] Restart prompt — notify when a config change requires restart to take effect
 
-Agent Pause now and let user review progress so far...
+Editor for `~/.openwren/openwren.json`. Two modes: **Form** (structured sections with proper inputs) and **Raw** (code editor showing the actual file with comments). The Config page manages settings NOT covered by Agents or Teams pages — those pages already handle their own CRUD.
+
+Scope — what the Config page manages:
+- Default model + fallback
+- Provider API keys (masked display, editable)
+- Channel settings (unauthorized behavior, rate limits)
+- Bindings (agent ↔ channel mappings)
+- Gateway settings (WS token — masked)
+- Search provider configuration
+- Scheduler settings (enabled, log/session retention)
+- Heartbeat settings (enabled, interval, active hours)
+- Session settings (idle reset, daily reset time)
+- Agent loop tuning (max iterations, compaction threshold)
+- Skills (global enable/disable, extra load dirs)
+- Timezone
+- Roles (manager/worker tool permission lists)
+
+NOT managed here (owned by other pages): agents.*, teams.*
+
+Files to read before starting:
+- `src/config.ts` — Config interface, defaultConfig, parseConfig(), reloadConfig()
+- `src/config-writer.ts` — readRawConfig(), writeConfigKeys(), removeConfigKeys()
+- `src/gateway/routes/agents.ts` — auth pattern, route registration pattern
+- `webui/src/pages/Teams.tsx` — page layout pattern (tabs, cards)
+- `webui/src/components/agents/OverviewTab.tsx` — form pattern (inputs, selects, save/cancel)
+- `webui/src/lib/api.ts` — API client
+- `webui/src/lib/types.ts` — where to add types
+- `~/.openwren/openwren.json` — actual config file with comments and sections
+
+Backend (`src/gateway/routes/config.ts` — new file):
+- [x] `GET /api/config` — returns the full flat config object from `readRawConfig()`. Sensitive fields (provider API keys, gateway.wsToken, binding credentials) returned as masked strings (e.g. `"sk-...abc"` — first 3 + last 3 chars, or `"••••••"` if shorter than 8). Also returns a `_meta.sensitiveKeys` array listing which keys are masked so the frontend knows not to send them back unchanged. Also returns `defaults` (flattened `defaultConfig` minus agents/teams/users/bindings/workspaceDir) so the form can show effective values for keys not explicitly set in the user's file.
+- [x] `GET /api/config/raw` — returns the raw file content as a string. Implemented but currently not wired to the UI (Raw tab hidden — see below).
+- [x] `PATCH /api/config` — accepts `{ set: Record<string, unknown>, remove: string[] }`. Calls `writeConfigKeys(set)` and `removeConfigKeys(remove)`. Skips any key in `set` whose value matches the masked placeholder (so unchanged secrets aren't overwritten with mask text). Calls `reloadConfig()`. Returns updated config (same shape as GET, including `defaults`).
+- [x] `PUT /api/config/raw` — implemented, validates JSON5 before writing. Not wired to UI yet.
+- [x] `POST /api/config/provider` — new endpoint not in original spec. Adds a provider end-to-end: appends `ENV_VAR=value` to `~/.openwren/.env` and writes `providers.{id}.apiKey: "${env:ENV_VAR}"` to `openwren.json`. For Ollama, writes `baseUrl` directly. Calls `reloadConfig()`.
+- [x] Auth: same Bearer token pattern as other route files.
+- [x] Register in `src/gateway/server.ts`.
+
+Frontend — Types:
+- [x] Added `ConfigResponse`, `ConfigRawResponse` types to `types.ts`.
+
+Frontend — Config page (`webui/src/pages/Config.tsx`):
+Originally Form + Raw tabs. Raw tab is **hidden** for now (code retained behind `{false && ...}` gate for future re-enable). Tabs UI removed — page goes straight to the form.
+
+Form — collapsible sections:
+- [x] **Model Defaults** — `defaultModel` + `defaultFallback` text inputs with Browse buttons opening `ModelPicker`. The `/api/models` endpoint was updated to only return providers with a configured API key (plus Ollama if its local API responds).
+- [x] **Providers** — one row per configured provider. Masked password input with eye toggle. Ollama shows its `baseUrl`. "Add provider" button opens `AddProviderDialog` — modal with provider picker, API key input, and a live preview showing `.env -> OPENAI_API_KEY=...` and `config -> providers.openai.apiKey: "${env:OPENAI_API_KEY}"`. Submitting writes both files.
+- [x] **Search** — provider select (brave, zenserp, searxng shown but only brave is implemented in backend), API key masked input for selected provider.
+- [x] **Gateway** — WS token masked input with warning text.
+- [x] **Scheduler** — enabled toggle, logRetention, sessionRetention inputs.
+- [x] **Heartbeat** — enabled toggle, interval, active hours start/end. Fields disabled when enabled=false.
+- [x] **Session** — idleResetMinutes, dailyResetTime inputs.
+- [x] **Agent Loop** — maxIterations, compaction toggle, contextWindowTokens, thresholdPercent.
+- [x] **Channel Settings** — unauthorizedBehavior select, rateLimit maxMessages + windowSeconds.
+- [x] **Timezone** — text input with auto-detected default as placeholder.
+- [x] Collapsible Cards; all start collapsed except Model Defaults.
+- [x] Global Save + Cancel buttons at top and bottom of form. Save sends PATCH with dirty-detection diff; shows success/warn toast (amber for changes needing restart).
+- [ ] **Bindings** — deferred. Channel/agent/credential mapping table not implemented. Telegram/Discord tokens currently only editable via openwren.json directly.
+- [ ] **Skills** — deferred. Global skill entries and extra load dirs not implemented.
+- [~] **Roles** — section was implemented then hidden (commented out) because exposing role permission editing to users is dangerous (tool allowlist footgun). Rework in Step 6.a — role/permissions become fully derived from team membership, not user-editable at all.
+
+Raw tab (deferred):
+- [~] Full-file code editor, Save/Revert buttons, JSON5 validation. Code exists but is not rendered (behind `{false && ...}`). Re-enable when we have a proper code editor (syntax highlighting, line numbers).
 
 **Step 7 — Schedules (uses Phase 9.1 REST API)**
 - [ ] Cron job list — view all scheduled tasks, last run time, next run time (GET /api/schedules)
