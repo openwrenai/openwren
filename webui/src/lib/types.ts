@@ -6,7 +6,6 @@ export interface StatusResponse {
     id: string;
     name: string;
     model: string | null;
-    role: string | null;
     description: string | null;
   }>;
   agentCount: number;
@@ -87,8 +86,8 @@ export interface Agent {
   name: string;
   model: string | null;
   fallback: string | null;
-  role: string | null;
   description: string | null;
+  isManager: boolean;
   defaultModel?: string;
   defaultFallback?: string;
 }
@@ -160,6 +159,24 @@ export interface AgentSkillsResponse {
   skills: AgentSkill[];
   total: number;
   enabled: number;
+}
+
+// --- Tools ---
+
+export interface AgentTool {
+  name: string;
+  description: string;
+  category: "base" | "manager" | "worker";
+  enabled: boolean;
+}
+
+export interface AgentToolsResponse {
+  tools: AgentTool[];
+  total: number;
+  enabled: number;
+  role: "manager" | "worker" | null;
+  managedTeams: string[];
+  memberTeams: string[];
 }
 
 // --- Config ---

@@ -2,13 +2,6 @@ import { useState } from "react";
 import { useForm } from "@tanstack/react-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { api } from "@/lib/api.ts";
 import type { Agent } from "@/lib/types.ts";
@@ -26,7 +19,6 @@ export function OverviewTab({ agent, onUpdated }: OverviewTabProps) {
     defaultValues: {
       name: agent.name,
       description: agent.description ?? "",
-      role: agent.role ?? "worker",
       model: agent.model ?? "",
       fallback: agent.fallback ?? "",
       useDefaultModel: !agent.model,
@@ -37,7 +29,6 @@ export function OverviewTab({ agent, onUpdated }: OverviewTabProps) {
 
       if (value.name !== agent.name) patch.name = value.name;
       if (value.description !== (agent.description ?? "")) patch.description = value.description || null;
-      if (value.role !== (agent.role ?? "worker")) patch.role = value.role;
 
       // Model handling
       if (value.useDefaultModel && agent.model) {
@@ -100,21 +91,6 @@ export function OverviewTab({ agent, onUpdated }: OverviewTabProps) {
                   placeholder="No description"
                   className="bg-muted/30 border border-border rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-w-md"
                 />
-              )}
-            </form.Field>
-
-            <label className="text-muted-foreground">Role</label>
-            <form.Field name="role">
-              {(field) => (
-                <Select value={field.state.value} onValueChange={(v) => field.handleChange(v)}>
-                  <SelectTrigger className="max-w-[200px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="worker">worker</SelectItem>
-                    <SelectItem value="manager">manager</SelectItem>
-                  </SelectContent>
-                </Select>
               )}
             </form.Field>
           </div>

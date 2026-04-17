@@ -26,7 +26,12 @@ import { FilesTab } from "@/components/agents/FilesTab.tsx";
 import { CreateAgentDialog } from "@/components/agents/CreateAgentDialog.tsx";
 import { CronJobsTab } from "@/components/agents/CronJobsTab.tsx";
 import { SkillsTab } from "@/components/agents/SkillsTab.tsx";
+import { ToolsTab } from "@/components/agents/ToolsTab.tsx";
 import { ChannelsTab } from "@/components/agents/ChannelsTab.tsx";
+
+function capitalizeFirst(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
 
 export function Agents() {
   const [agents, setAgents] = useState<AgentListItem[]>([]);
@@ -116,12 +121,17 @@ export function Agents() {
       <div className="flex items-center gap-3 mb-6">
         <Select value={selectedId} onValueChange={setSelectedId}>
           <SelectTrigger className="w-64">
-            <SelectValue placeholder="Select an agent" />
+            <SelectValue placeholder="Select an agent">
+              {(value) => {
+                const a = agents.find((x) => x.id === value);
+                return a ? capitalizeFirst(a.name) : "Select an agent";
+              }}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {agents.map((a) => (
               <SelectItem key={a.id} value={a.id}>
-                {a.name}
+                {capitalizeFirst(a.name)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -152,6 +162,7 @@ export function Agents() {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="files">Files</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
+            <TabsTrigger value="tools">Tools</TabsTrigger>
             <TabsTrigger value="channels">Channels</TabsTrigger>
             <TabsTrigger value="cron">Cron Jobs</TabsTrigger>
           </TabsList>
@@ -161,11 +172,15 @@ export function Agents() {
           </TabsContent>
 
           <TabsContent value="files" className="mt-6">
-            <FilesTab agentId={selectedAgent.id} agentRole={selectedAgent.role} />
+            <FilesTab agentId={selectedAgent.id} isManager={selectedAgent.isManager} />
           </TabsContent>
 
           <TabsContent value="skills" className="mt-6">
             <SkillsTab agentId={selectedAgent.id} />
+          </TabsContent>
+
+          <TabsContent value="tools" className="mt-6">
+            <ToolsTab key={selectedAgent.id} agentId={selectedAgent.id} />
           </TabsContent>
 
           <TabsContent value="channels" className="mt-6">

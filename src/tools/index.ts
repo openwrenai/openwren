@@ -14,7 +14,18 @@ import {
 } from "./orchestrate";
 import { isApproved, permanentlyApprove } from "./approvals";
 import { classifyCommand, getSecurity, isProtectedWrite } from "../security";
-import { getAgentPermissions } from "../config";
+import { getAgentToolNames } from "./categories";
+
+export {
+  BASE_TOOL_NAMES,
+  MANAGER_TOOL_NAMES,
+  WORKER_TOOL_NAMES,
+  getToolCategory,
+  getAgentRoleFromTeams,
+  getAgentCandidateTools,
+  getAgentToolNames,
+} from "./categories";
+export type { ToolCategory } from "./categories";
 
 // ---------------------------------------------------------------------------
 // Confirm function type
@@ -76,20 +87,20 @@ const allTools: ToolDefinition[] = [
   completeTaskToolDefinition,
 ];
 
+const toolByName = new Map(allTools.map((t) => [t.name, t]));
+
+/** Returns the ToolDefinition for a tool name, or undefined if unknown. */
+export function getToolDefinitionByName(name: string): ToolDefinition | undefined {
+  return toolByName.get(name);
+}
+
 /**
- * Returns tool definitions for a specific agent, filtered by role permissions.
- * If the agent has no role assigned, all tools are returned (backwards compatible).
+ * Returns tool definitions for a specific agent. Role (BASE/MANAGER/WORKER)
+ * is derived from team membership, then `agents.X.disabledTools` is subtracted.
  */
 export function getToolDefinitions(agentId: string, isDelegated = false): ToolDefinition[] {
-  const permissions = getAgentPermissions(agentId);
-  let tools = permissions ? allTools.filter(t => permissions.includes(t.name)) : allTools;
-
-  // Sub-managers should not see create_workflow — they delegate within an existing workflow
-  if (isDelegated) {
-    tools = tools.filter(t => t.name !== "create_workflow");
-  }
-
-  return tools;
+  const names = getAgentToolNames(agentId, isDelegated);
+  return names.map((n) => toolByName.get(n)).filter((t): t is ToolDefinition => !!t);
 }
 
 // ---------------------------------------------------------------------------

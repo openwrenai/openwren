@@ -155,15 +155,6 @@ export async function registerTeamRoutes(app: FastifyInstance): Promise<void> {
     };
     if (displayName) keys[`teams.${name}.name`] = displayName;
 
-    // Auto-set roles
-    keys[`agents.${managerId}.role`] = "manager";
-    for (const mid of memberIds) {
-      // Only set worker role if agent doesn't already have a role (might be manager of another team)
-      if (!config.agents[mid]?.role) {
-        keys[`agents.${mid}.role`] = "worker";
-      }
-    }
-
     writeConfigKeys(keys);
     reloadConfig();
 
@@ -226,47 +217,6 @@ export async function registerTeamRoutes(app: FastifyInstance): Promise<void> {
       keys[`teams.${name}.members`] = newMemberIds;
     }
 
-    // Auto-set roles for new manager
-    if (body.managerId !== undefined && body.managerId !== currentTeam.manager) {
-      keys[`agents.${newManagerId}.role`] = "manager";
-      // Clear old manager's role if they're not managing another team
-      const oldManagerId = currentTeam.manager;
-      const stillManages = Object.entries(config.teams).some(
-        ([tName, t]) => tName !== name && t.manager === oldManagerId
-      );
-      if (!stillManages) {
-        // Check if old manager is still a member of any team
-        const stillMember = Object.entries(config.teams).some(
-          ([tName, t]) => tName !== name && t.members.includes(oldManagerId)
-        );
-        if (stillMember) {
-          keys[`agents.${oldManagerId}.role`] = "worker";
-        } else {
-          toRemove.push(`agents.${oldManagerId}.role`);
-        }
-      }
-    }
-
-    // Auto-set roles for new members
-    if (body.memberIds !== undefined) {
-      for (const mid of newMemberIds) {
-        if (!config.agents[mid]?.role) {
-          keys[`agents.${mid}.role`] = "worker";
-        }
-      }
-
-      // Clear roles for removed members (if they're not in any other team)
-      const removedMembers = currentTeam.members.filter((m) => !newMemberIds.includes(m));
-      for (const mid of removedMembers) {
-        const inOtherTeam = Object.entries(config.teams).some(
-          ([tName, t]) => tName !== name && (t.manager === mid || t.members.includes(mid))
-        );
-        if (!inOtherTeam) {
-          toRemove.push(`agents.${mid}.role`);
-        }
-      }
-    }
-
     if (Object.keys(keys).length > 0) writeConfigKeys(keys);
     if (toRemove.length > 0) removeConfigKeys(toRemove);
     reloadConfig();
@@ -283,35 +233,13 @@ export async function registerTeamRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: `Team "${name}" not found` });
     }
 
-    const team = config.teams[name];
-
     // Find and remove all teams.{name}.* keys
     const raw = readRawConfig();
     const keysToRemove = Object.keys(raw).filter(
       (k) => k === `teams.${name}` || k.startsWith(`teams.${name}.`)
     );
     if (keysToRemove.length > 0) removeConfigKeys(keysToRemove);
-
-    // Clear roles for agents no longer in any team
-    const rolesToRemove: string[] = [];
-    const allAgents = [team.manager, ...team.members];
-    // Need to reload first so config.teams no longer has this team
     reloadConfig();
-
-    for (const agentId of allAgents) {
-      if (!config.agents[agentId]) continue;
-      const inAnyTeam = Object.values(config.teams).some(
-        (t) => t.manager === agentId || t.members.includes(agentId)
-      );
-      if (!inAnyTeam && config.agents[agentId]?.role) {
-        rolesToRemove.push(`agents.${agentId}.role`);
-      }
-    }
-
-    if (rolesToRemove.length > 0) {
-      removeConfigKeys(rolesToRemove);
-      reloadConfig();
-    }
 
     return { deleted: true };
   });

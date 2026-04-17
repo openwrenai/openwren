@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
-import { config, BUNDLED_SKILLS_DIR, getAgentPermissions } from "../config";
+import { config, BUNDLED_SKILLS_DIR } from "../config";
+import { getAgentRoleFromTeams, getAgentToolNames } from "../tools/categories";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -255,9 +256,9 @@ function passesGates(skill: ParsedSkill, agentId: string, quiet = false, hasTask
     }
   }
 
-  // 5. Role gate — agent must have one of the listed roles
+  // 5. Role gate — agent must have one of the listed roles (derived from team membership)
   if (skill.requires.role.length > 0) {
-    const agentRole = config.agents[agentId]?.role;
+    const agentRole = getAgentRoleFromTeams(agentId);
     if (!agentRole || !skill.requires.role.includes(agentRole)) {
       if (!quiet) console.log(`[skills] ${skill.name}: requires role ${skill.requires.role.join("|")} — agent has ${agentRole || "none"}`);
       return false;
@@ -274,16 +275,13 @@ function passesGates(skill: ParsedSkill, agentId: string, quiet = false, hasTask
     return false;
   }
 
-  // 7. Tools gate — agent must have all listed tools in its permissions
+  // 7. Tools gate — agent must have all listed tools in its actual toolset
   if (skill.requires.tools.length > 0) {
-    const permissions = getAgentPermissions(agentId);
-    // null permissions = no role = all tools available, so all tool gates pass
-    if (permissions) {
-      for (const tool of skill.requires.tools) {
-        if (!permissions.includes(tool)) {
-          if (!quiet) console.log(`[skills] ${skill.name}: requires tool ${tool} — not in agent's role permissions`);
-          return false;
-        }
+    const toolNames = new Set(getAgentToolNames(agentId));
+    for (const tool of skill.requires.tools) {
+      if (!toolNames.has(tool)) {
+        if (!quiet) console.log(`[skills] ${skill.name}: requires tool ${tool} — not in agent's tool set`);
+        return false;
       }
     }
   }
@@ -534,17 +532,15 @@ function getBlockReason(skill: ParsedSkill, agentId: string): string | null {
     if (!value) return `Missing: config:${dotPath}`;
   }
   if (skill.requires.role.length > 0) {
-    const agentRole = config.agents[agentId]?.role;
+    const agentRole = getAgentRoleFromTeams(agentId);
     if (!agentRole || !skill.requires.role.includes(agentRole)) {
       return `Requires role: ${skill.requires.role.join(" or ")}`;
     }
   }
   if (skill.requires.tools.length > 0) {
-    const permissions = getAgentPermissions(agentId);
-    if (permissions) {
-      for (const tool of skill.requires.tools) {
-        if (!permissions.includes(tool)) return `Missing: tool:${tool}`;
-      }
+    const toolNames = new Set(getAgentToolNames(agentId));
+    for (const tool of skill.requires.tools) {
+      if (!toolNames.has(tool)) return `Missing: tool:${tool}`;
     }
   }
   for (const key of skill.requires.env) {
