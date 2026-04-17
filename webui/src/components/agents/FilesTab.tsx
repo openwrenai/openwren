@@ -8,7 +8,7 @@ import type { AgentFilesResponse, AgentFileContentResponse } from "@/lib/types.t
 
 interface FilesTabProps {
   agentId: string;
-  agentRole: string | null;
+  isManager: boolean;
 }
 
 /** Friendly display names for agent files. */
@@ -18,7 +18,7 @@ const FILE_LABELS: Record<string, string> = {
   "workflow.md": "Workflow",
 };
 
-export function FilesTab({ agentId, agentRole }: FilesTabProps) {
+export function FilesTab({ agentId, isManager }: FilesTabProps) {
   const [files, setFiles] = useState<AgentFilesResponse["files"]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [content, setContent] = useState("");
@@ -33,7 +33,7 @@ export function FilesTab({ agentId, agentRole }: FilesTabProps) {
       if (cancelled) return;
       // Filter: only show workflow.md for managers
       const visible = res.files.filter(
-        (f) => f.name !== "workflow.md" || agentRole === "manager"
+        (f) => f.name !== "workflow.md" || isManager
       );
       setFiles(visible);
       // Auto-select first file
@@ -42,7 +42,7 @@ export function FilesTab({ agentId, agentRole }: FilesTabProps) {
       }
     });
     return () => { cancelled = true; };
-  }, [agentId, agentRole]);
+  }, [agentId, isManager]);
 
   // Fetch file content when active file changes
   useEffect(() => {
@@ -68,7 +68,7 @@ export function FilesTab({ agentId, agentRole }: FilesTabProps) {
       // Refresh file list to update exists status
       const res = await api.get<AgentFilesResponse>(`/api/agents/${agentId}/files`);
       const visible = res.files.filter(
-        (f) => f.name !== "workflow.md" || agentRole === "manager"
+        (f) => f.name !== "workflow.md" || isManager
       );
       setFiles(visible);
     } catch {

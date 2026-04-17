@@ -304,11 +304,6 @@ export function Dashboard() {
                         {agent.model ?? "default model"}
                       </div>
                     </div>
-                    {agent.role && (
-                      <Badge variant="secondary" className="text-xs capitalize">
-                        {agent.role}
-                      </Badge>
-                    )}
                   </div>
                 ))}
                 {status.agents.length > 10 && (

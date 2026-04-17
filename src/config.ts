@@ -34,8 +34,8 @@ export interface AgentConfig {
   model?: string;       // "provider/model" override, e.g. "anthropic/claude-sonnet-4-6". Inherits defaultModel if unset.
   fallback?: string;    // Comma-separated fallback chain, e.g. "anthropic/claude-haiku-3-5, ollama/llama3.2"
   description?: string; // One-liner shown to managers via list_team and system prompt injection
-  role?: string; // "manager" or "worker" (default: "worker") — maps to roles.{name} for tool permissions
   skills?: Record<string, { enabled?: boolean }>; // Per-agent skill overrides. Absent = inherit global.
+  disabledTools?: string[]; // Per-agent tool opt-out. Subtractive only (cannot grant tools outside candidate set).
 }
 
 /** Team config — defines manager-worker relationships. Independent of any single agent. */
@@ -90,7 +90,6 @@ export interface Config {
   };
   bindings: Record<string, Record<string, string>>; // bindings[channel][agentId] = credential
   teams: Record<string, TeamConfig>; // teams[teamName] = { manager, members }
-  roles: Record<string, string[]>;  // roles[roleName] = list of permitted tool names
   timezone: string;
   session: {
     idleResetMinutes: number;
@@ -206,10 +205,6 @@ const defaultConfig: Omit<Config, "workspaceDir"> = {
   },
   bindings: {},
   teams: {},
-  roles: {
-    manager: ["create_workflow", "delegate_task", "query_workflow", "read_file", "write_file", "save_memory", "memory_search"],
-    worker: ["read_file", "write_file", "log_progress", "complete_task", "save_memory", "memory_search"],
-  },
   gateway: {
     wsToken: "",
   },
@@ -406,28 +401,6 @@ export function getTeamMembers(agentId: string): { id: string; description: stri
 }
 
 // ---------------------------------------------------------------------------
-// Role helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Returns the list of permitted tool names for an agent based on its role.
- * Returns null if agent has no role — meaning no filtering (all tools available).
- * Task context tools (log_progress, complete_task) are added by the caller when needed.
- */
-export function getAgentPermissions(agentId: string): string[] | null {
-  const agent = config.agents[agentId];
-  if (!agent?.role) return null; // No role = all tools (backwards compatible)
-
-  const permissions = config.roles[agent.role];
-  if (!permissions) {
-    console.warn(`[roles] Agent "${agentId}" has role "${agent.role}" but no matching role definition — allowing all tools`);
-    return null;
-  }
-
-  return permissions;
-}
-
-// ---------------------------------------------------------------------------
 // Team validation — run after config is loaded
 // ---------------------------------------------------------------------------
 
@@ -469,24 +442,9 @@ export function validateTeams(): void {
     }
   }
 
-  // Validate roles — warn if agent references unknown role
-  for (const [agentId, agent] of Object.entries(config.agents)) {
-    if (agent.role && !config.roles[agent.role]) {
-      console.warn(`[roles] Warning: agent "${agentId}" has role "${agent.role}" but no matching role definition in roles.*`);
-    }
-  }
-
   // Startup log — teams
   for (const [teamName, team] of Object.entries(config.teams)) {
     console.log(`[teams] ${teamName}: ${team.manager} → ${team.members.join(", ")}`);
-  }
-
-  // Startup log — roles
-  for (const [agentId, agent] of Object.entries(config.agents)) {
-    if (agent.role) {
-      const perms = config.roles[agent.role];
-      console.log(`[roles] ${agentId}: ${agent.role} (${perms ? perms.length + " tools" : "unknown role"})`);
-    }
   }
 }
 

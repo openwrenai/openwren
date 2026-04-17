@@ -5,13 +5,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import { api } from "@/lib/api.ts";
@@ -30,7 +23,6 @@ export function CreateAgentDialog({ open, onClose, onCreated }: CreateAgentDialo
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [role, setRole] = useState("worker");
   const [model, setModel] = useState("");
   const [useDefault, setUseDefault] = useState(true);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -54,7 +46,6 @@ export function CreateAgentDialog({ open, onClose, onCreated }: CreateAgentDialo
     setId("");
     setName("");
     setDescription("");
-    setRole("worker");
     setModel("");
     setUseDefault(true);
     setError("");
@@ -74,7 +65,6 @@ export function CreateAgentDialog({ open, onClose, onCreated }: CreateAgentDialo
     try {
       const body: Record<string, string> = { id, name };
       if (description) body.description = description;
-      if (role) body.role = role;
       if (!useDefault && model) body.model = model;
 
       await api.post("/api/agents", body);
@@ -130,19 +120,6 @@ export function CreateAgentDialog({ open, onClose, onCreated }: CreateAgentDialo
               placeholder="Optional"
               className="w-full bg-muted/30 border border-border rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-sm text-muted-foreground">Role</label>
-            <Select value={role} onValueChange={setRole}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="worker">worker</SelectItem>
-                <SelectItem value="manager">manager</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="space-y-2">

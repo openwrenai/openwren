@@ -22,6 +22,9 @@ import { config, reloadConfig } from "../../config";
 import { writeConfigKeys, removeConfigKeys } from "../../config-writer";
 import { defaultSoul } from "../../workspace";
 import { getSkillInventory } from "../../agent/skills";
+import { getAgentCandidateTools, getToolCategory, getAgentRoleFromTeams } from "../../tools/categories";
+import { getToolDefinitionByName } from "../../tools";
+import { getTeamsForAgent } from "../../config";
 import { timingSafeEqual } from "crypto";
 
 // ---------------------------------------------------------------------------
@@ -65,13 +68,14 @@ function agentDir(agentId: string): string {
 
 function agentToJson(id: string) {
   const agent = config.agents[id];
+  const teams = getTeamsForAgent(id);
   return {
     id,
     name: agent.name || id,
     model: agent.model ?? null,
     fallback: agent.fallback ?? null,
-    role: agent.role ?? null,
     description: agent.description ?? null,
+    isManager: teams.some((t) => t.role === "manager"),
   };
 }
 
@@ -266,6 +270,113 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // -------------------------------------------------------------------------
+  // Tools (Step 6.a)
+  // -------------------------------------------------------------------------
+
+  // GET /api/agents/:id/tools — list candidate tools with enabled state + role context
+  app.get<{ Params: { id: string } }>("/api/agents/:id/tools", async (request, reply) => {
+    if (!authenticate(request, reply)) return;
+
+    const { id } = request.params;
+    if (!config.agents[id]) {
+      return reply.code(404).send({ error: `Agent "${id}" not found` });
+    }
+
+    const candidates = getAgentCandidateTools(id);
+    const disabled = new Set(config.agents[id].disabledTools ?? []);
+    const teams = getTeamsForAgent(id);
+    const role = getAgentRoleFromTeams(id);
+
+    const tools = candidates.map((name) => {
+      const def = getToolDefinitionByName(name);
+      return {
+        name,
+        description: def?.description ?? "",
+        category: getToolCategory(name) ?? "base",
+        enabled: !disabled.has(name),
+      };
+    });
+
+    const enabledCount = tools.filter((t) => t.enabled).length;
+    const managedTeams = teams.filter((t) => t.role === "manager").map((t) => t.name);
+    const memberTeams = teams.filter((t) => t.role === "member").map((t) => t.name);
+
+    return {
+      tools,
+      total: tools.length,
+      enabled: enabledCount,
+      role,
+      managedTeams,
+      memberTeams,
+    };
+  });
+
+  // PATCH /api/agents/:id/tools — update disabledTools list
+  app.patch<{ Params: { id: string }; Body: { entries: Record<string, { enabled: boolean }> } }>(
+    "/api/agents/:id/tools",
+    async (request, reply) => {
+      if (!authenticate(request, reply)) return;
+
+      const { id } = request.params;
+      if (!config.agents[id]) {
+        return reply.code(404).send({ error: `Agent "${id}" not found` });
+      }
+
+      const body = request.body;
+      if (!body?.entries || typeof body.entries !== "object") {
+        return reply.code(400).send({ error: "Request body must include 'entries' object" });
+      }
+
+      const candidates = new Set(getAgentCandidateTools(id));
+      // Compute new disabledTools: every candidate tool explicitly set to enabled=false
+      // (manager/worker entries are ignored on write — they're not user-controllable)
+      const current = new Set(config.agents[id].disabledTools ?? []);
+      for (const [toolName, settings] of Object.entries(body.entries)) {
+        if (!candidates.has(toolName)) continue;
+        const category = getToolCategory(toolName);
+        // Only BASE tools are user-togglable; ignore any manager/worker entries
+        if (category !== "base") continue;
+        if (settings.enabled) {
+          current.delete(toolName);
+        } else {
+          current.add(toolName);
+        }
+      }
+
+      const newDisabled = [...current].filter((n) => candidates.has(n));
+      if (newDisabled.length > 0) {
+        writeConfigKeys({ [`agents.${id}.disabledTools`]: newDisabled });
+      } else {
+        removeConfigKeys([`agents.${id}.disabledTools`]);
+      }
+      reloadConfig();
+
+      // Return same shape as GET
+      const disabled = new Set(config.agents[id].disabledTools ?? []);
+      const teams = getTeamsForAgent(id);
+      const role = getAgentRoleFromTeams(id);
+      const tools = getAgentCandidateTools(id).map((name) => {
+        const def = getToolDefinitionByName(name);
+        return {
+          name,
+          description: def?.description ?? "",
+          category: getToolCategory(name) ?? "base",
+          enabled: !disabled.has(name),
+        };
+      });
+      const enabledCount = tools.filter((t) => t.enabled).length;
+      return {
+        tools,
+        total: tools.length,
+        enabled: enabledCount,
+        role,
+        managedTeams: teams.filter((t) => t.role === "manager").map((t) => t.name),
+        memberTeams: teams.filter((t) => t.role === "member").map((t) => t.name),
+      };
+    }
+  );
+
+  // -------------------------------------------------------------------------
   // CRUD — config mutations (Step 4b)
   // -------------------------------------------------------------------------
 
@@ -281,7 +392,7 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const body = request.body ?? {};
-      const allowedFields = ["name", "description", "role", "model", "fallback"];
+      const allowedFields = ["name", "description", "model", "fallback"];
       const toWrite: Record<string, unknown> = {};
       const toRemove: string[] = [];
 
@@ -305,7 +416,7 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // POST /api/agents — create new agent
-  app.post<{ Body: { id: string; name: string; description?: string; role?: string; model?: string; fallback?: string } }>(
+  app.post<{ Body: { id: string; name: string; description?: string; model?: string; fallback?: string } }>(
     "/api/agents",
     async (request, reply) => {
       if (!authenticate(request, reply)) return;
@@ -331,7 +442,6 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
         [`agents.${id}.name`]: body.name,
       };
       if (body.description) keys[`agents.${id}.description`] = body.description;
-      if (body.role) keys[`agents.${id}.role`] = body.role;
       if (body.model) keys[`agents.${id}.model`] = body.model;
       if (body.fallback) keys[`agents.${id}.fallback`] = body.fallback;
 
